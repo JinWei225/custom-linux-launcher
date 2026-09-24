@@ -5,6 +5,7 @@ launcher --mode clipboard   toggle a specific mode
 launcher --show / --hide    show or hide without toggling
 launcher --reload | --quit  control the running daemon
 launcher --daemon           start in the background (used by the systemd unit)
+launcher --import-ulauncher print Ulauncher shortcuts as [[quicklink]] TOML
 """
 
 from __future__ import annotations
@@ -25,6 +26,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     group.add_argument("--reload", action="store_true", help="reload the config file")
     group.add_argument("--quit", action="store_true", help="stop the running launcher")
     group.add_argument("--daemon", action="store_true", help="start hidden in the background")
+    group.add_argument(
+        "--import-ulauncher",
+        action="store_true",
+        help="print Ulauncher shortcuts as [[quicklink]] entries for config.toml",
+    )
     parser.add_argument("--debug", action="store_true", help="verbose logging")
     return parser.parse_args(argv)
 
@@ -44,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    if args.import_ulauncher:
+        from .importers import import_ulauncher
+
+        print(import_ulauncher(), end="")
+        return 0
+
     action, param = requested_action(args)
 
     if not args.daemon:

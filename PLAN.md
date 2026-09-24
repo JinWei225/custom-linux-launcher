@@ -162,13 +162,18 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 
 ## 4. Behaviour details
 
-### 4.1 Main search (M1)
-- A single input box. Results are gathered from all providers enabled in the current mode and ranked by `fuzzy_score × (1 + frecency_boost)`.
-- **Alias:** if what you type exactly matches an alias, that item goes to the top (for example `gh` → GitHub quicklink, `code` → VS Code).
-- **Quicklinks with arguments:** `url = "https://github.com/search?q={query}"`. Typing `gh foo` opens the URL with `foo` URL-encoded.
-- **Web search:** keyword engines (`g`, `ddg`, `yt`, `wiki`). The default engine is always the last result, "Search the web for '…'".
-- **Keys:** Enter opens the item. Alt+Enter gives a second action: show the file in its folder, open the URL in a private window, or copy a clipboard item without pasting. Ctrl+1…9 picks a result directly. Esc hides the window. Tab autocompletes an alias.
-- The app list comes from `Gio.AppInfo.get_all()`, which includes Flatpak and Snap apps and respects `NoDisplay`. It is refreshed when `.desktop` files change. Apps are launched with `Gio.DesktopAppInfo.launch()` so GNOME handles startup notification and focus.
+### 4.1 Main search (M1, as built)
+- A single input box. Results are gathered from all providers enabled in the current mode and ranked by `match score × (1 + 0.7 × frecency boost)`. The frecency boost is a counter that halves every 14 days, mapped into [0, 1) and stored in `~/.local/share/launcher/launcher.db`. Weight 0.7 lets a frequently used prefix match overtake an unused exact match, but never an exact alias.
+- **Fuzzy matching:** exact > prefix > word-start substring > substring > letters in order. Letters scattered across a long name are rejected unless most of them start words (`vsc` → Visual Studio Code).
+- **App aliases:** `[aliases]` maps an alias to a desktop id or app name (`code = "code.desktop"`, `ff = "Firefox"`). An exact alias match scores 2.0, above any fuzzy match.
+- **Quicklinks and web search are one thing:** `[[quicklink]]` with `name`, `url`, optional `alias`/`icon`. A `{query}` in the URL makes it a search: `g cats` opens it with `cats` URL-encoded. Typing only the alias and pressing Tab completes to `g `.
+- **Fallback searches:** quicklinks with `fallback = true` appear as "Search X for '…'" rows at the bottom for any typed text, in config order. They always get room within the result limit and are never boosted by frecency (Ulauncher's "default search" behaviour).
+- **Ulauncher import:** `launcher --import-ulauncher >> ~/.config/launcher/config.toml` converts `shortcuts.json` (`%s` → `{query}`, default searches → `fallback = true`).
+- **Keys:** Enter runs the item. Alt+Enter runs the second action (copy the URL for quicklinks; later milestones add reveal-in-folder and copy without pasting). Ctrl+1…9 picks a result directly. Tab completes. Esc hides.
+- **Apps:** `Gio.AppInfo.get_all()` (Flatpak and Snap included, `NoDisplay` respected), refreshed through `Gio.AppInfoMonitor`. Matched on name, executable, and on generic name and keywords (substring matches only). In `apps` mode, an empty query lists apps by frecency.
+- **Website icons:** quicklinks without `icon = …` show the site's icon, from Google's favicon service (`s2/favicons?domain=…&sz=64`, which falls back to the parent domain when there's no icon). Icons are fetched in the background at startup and on config change, cached in `~/.cache/launcher/favicons/` for 30 days, and never block typing. Sites with no icon are retried after 3 days, network errors after 10 minutes. Turn off with `[ui] favicons = false`.
+- **Interim shortcut (until M3):** the existing GNOME custom shortcut `custom0` (Ctrl+Space, previously `ulauncher-toggle`) now runs `~/.local/bin/launcher`. M3's `install-shortcuts` takes over from it.
+- **Launching survives launcher restarts:** each launched app (and the browser opened for a URL) is spawned by the launcher, then moved into its own systemd scope `app-launcher-<id>-<pid>.scope`, as GNOME Shell does. Otherwise `systemctl --user restart launcher` would kill every app opened through it. The app's output goes to /dev/null, not the launcher's journal. Actions run *before* the window hides, because GNOME only honours the xdg-activation token (which gives the new app focus) from the focused window.
 
 ### 4.2 Modes
 `launcher --mode {all|apps|files|clipboard|snippets}` opens the window with only those providers, and a matching placeholder text and layout. For example, clipboard mode shows a list on the left and a large text or image preview on the right.
@@ -219,13 +224,14 @@ linux-launcher/
 │   ├── paths.py                  # XDG locations
 │   ├── style.css
 │   ├── store.py                  # SQLite (frecency, clipboard, snippets metadata)
+│   ├── launching.py              # spawn apps/URIs into their own systemd scopes
+│   ├── importers.py              # Ulauncher shortcuts.json → [[quicklink]]
 │   ├── shortcuts.py              # gsettings custom-keybinding installer
 │   └── providers/
 │       ├── base.py               # Result, Provider and Host protocols
 │       ├── commands.py           # built-in: reload config, open config, quit
 │       ├── apps.py
-│       ├── quicklinks.py
-│       ├── websearch.py
+│       ├── quicklinks.py         # quicklinks + fallback web searches
 │       ├── files.py
 │       ├── clipboard.py
 │       └── snippets.py           # + espanso YAML generator
@@ -247,7 +253,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | M | Deliverable | Decisions needed | Done when |
 |---|---|---|---|
 | **M0** ✅ | Skeleton: Gio.Application single instance, window that hides and shows, config loading, systemd unit, `make dev` | ✅ all decided | `launcher` shows or hides the window within 100 ms from the command line. **Done 2026-09-24:** about 60 ms end to end (command + window focused) |
-| **M1** | Apps, quicklinks, web search, aliases, frecency ranking | — | Ulauncher can be uninstalled |
+| **M1** ✅ | Apps, quicklinks, web search, aliases, frecency ranking, Ulauncher import | — | Ulauncher can be uninstalled. **Built 2026-09-24:** waiting on your daily-use check |
 | **M2** | File search over configured folders, open and reveal-in-folder actions | D5 | Finding a new download takes under 1 s after it lands |
 | **M3** | `launcher install-shortcuts` with clash check; per-mode shortcuts | ✅ D8 | All mode shortcuts work from any app |
 | **M4** | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app |

@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+# A subsequence match that is not mostly at word starts may span at most this many
+# characters per query character.
+MAX_SPAN_FACTOR = 2
+
 
 def fuzzy_score(query: str, text: str) -> float | None:
     q = query.casefold().strip()
@@ -39,8 +43,13 @@ def fuzzy_score(query: str, text: str) -> float | None:
     )
     if positions is None:
         return None
-    boundary_ratio = sum(_is_boundary(t, i) for i in positions) / len(q)
-    spread = (positions[-1] - positions[0] + 1) / len(t)
+    boundary_ratio = sum(_is_boundary(t, i) for i in positions) / len(positions)
+    span = positions[-1] - positions[0] + 1
+    # Letters scattered across a long name ("fire" in "LibreOffice Impress") are noise.
+    # Keep word-initial matches ("vsc" -> Visual Studio Code) and compact ones ("frfx").
+    if boundary_ratio < 0.5 and span > MAX_SPAN_FACTOR * len(positions):
+        return None
+    spread = span / len(t)
     return 0.3 + 0.2 * boundary_ratio + 0.1 * (1 - spread) * tightness
 
 

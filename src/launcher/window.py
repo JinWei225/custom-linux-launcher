@@ -160,6 +160,17 @@ class LauncherWindow(Adw.ApplicationWindow):
         self._cancel_pending_hide()
         self.set_visible(False)
 
+    def refresh_if_visible(self) -> None:
+        """Re-render results (e.g. a website icon arrived) without moving the selection."""
+        if not self.get_visible():
+            return
+        row = self._list.get_selected_row()
+        index = row.get_index() if row is not None else 0
+        self._refresh()
+        target = self._list.get_row_at_index(index)
+        if target is not None:
+            self._list.select_row(target)
+
     def set_query(self, text: str) -> None:
         self._entry.set_text(text)
         self._entry.set_position(-1)
@@ -221,6 +232,11 @@ class LauncherWindow(Adw.ApplicationWindow):
         elif bottom > adj.get_value() + adj.get_page_size():
             adj.set_value(bottom - adj.get_page_size())
 
+    def run_selected(self, alt: bool = False) -> None:
+        row = self._list.get_selected_row()
+        if row is not None:
+            self._run(row.result, alt)
+
     def _run_index(self, index: int, alt: bool) -> None:
         row = self._list.get_row_at_index(index)
         if row is not None:
@@ -230,13 +246,22 @@ class LauncherWindow(Adw.ApplicationWindow):
         action = result.alt_action if alt and result.alt_action else result.action
         if action is None:
             return
-        # Hide first so focus returns to (or moves to) the target window.
-        self.hide_launcher()
+        # Run while still focused: the activation token handed to launched apps (and a
+        # clipboard write) is only honoured from the focused window. Then hide.
         try:
             action()
         except Exception as e:
             log.exception("action for %s failed", result.id)
             self._app.notify_error(f"“{result.title}” failed", str(e))
+        else:
+            self._engine.record(result)
+        finally:
+            self.hide_launcher()
+
+    def _complete(self) -> None:
+        row = self._list.get_selected_row()
+        if row is not None and row.result.completion:
+            self.set_query(row.result.completion)
 
     # --- events ----------------------------------------------------------------------
 
@@ -254,11 +279,11 @@ class LauncherWindow(Adw.ApplicationWindow):
         elif keyval == Gdk.KEY_Up or (ctrl and keyval in (Gdk.KEY_p, Gdk.KEY_k)):
             self._move_selection(-1)
         elif keyval in _ENTER_KEYS and (not mods or alt):
-            row = self._list.get_selected_row()
-            if row is not None:
-                self._run(row.result, alt=alt)
+            self.run_selected(alt=alt)
         elif ctrl and keyval in _NUMBER_KEYS:
             self._run_index(_NUMBER_KEYS[keyval] - 1, alt=False)
+        elif keyval == Gdk.KEY_Tab and not mods:
+            self._complete()  # always consume Tab so focus never leaves the search box
         else:
             return False
         return True

@@ -12,12 +12,17 @@ import gi
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+gi.require_version("GLibUnix", "2.0")
+from gi.repository import Adw, Gdk, Gio, GLib, GLibUnix, Gtk  # noqa: E402
 
-from . import APP_ID, paths  # noqa: E402
+from . import APP_ID, launching, paths  # noqa: E402
 from .config import Config, ConfigError, ensure_config, load_config  # noqa: E402
 from .engine import MODES, Engine  # noqa: E402
+from .favicons import FaviconCache  # noqa: E402
+from .providers.apps import AppsProvider  # noqa: E402
 from .providers.commands import CommandsProvider  # noqa: E402
+from .providers.quicklinks import QuickLinksProvider, WebSearchProvider  # noqa: E402
+from .store import UsageStore  # noqa: E402
 from .window import LauncherWindow  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -34,7 +39,10 @@ class LauncherApp(Adw.Application):
         self.config = Config()
         self.window: LauncherWindow | None = None
         self._config_monitor: Gio.FileMonitor | None = None
+        self._app_monitor: Gio.AppInfoMonitor | None = None
         self._reload_source = 0
+        self._usage: UsageStore | None = None
+        self._favicons: FaviconCache | None = None
 
     # --- lifecycle -------------------------------------------------------------------
 
@@ -50,13 +58,42 @@ class LauncherApp(Adw.Application):
         except ConfigError as e:
             problems = [f"{e} (using defaults)"]
 
-        engine = Engine({"commands": CommandsProvider(self)})
-        self.window = LauncherWindow(self, engine, self.config)
+        self._usage = UsageStore(paths.data_dir() / "launcher.db")
+        self._favicons = FaviconCache(
+            paths.cache_dir() / "favicons",
+            on_update=lambda: self.window and self.window.refresh_if_visible(),
+            call_soon=lambda fn: GLib.idle_add(lambda: (fn(), GLib.SOURCE_REMOVE)[1]),
+        )
+        apps = AppsProvider(self)
+        self._engine = Engine(
+            {
+                "apps": apps,
+                "quicklinks": QuickLinksProvider(self, icons=self._website_icon),
+                "commands": CommandsProvider(self),
+                "websearch": WebSearchProvider(self, icons=self._website_icon),
+            },
+            usage=self._usage,
+        )
+        self._engine.configure(self.config)
+        self._prefetch_icons()
+        # Rebuild the app list lazily whenever .desktop files are added or removed.
+        self._app_monitor = Gio.AppInfoMonitor.get()
+        self._app_monitor.connect("changed", lambda _m: apps.invalidate())
+        apps.query("")  # load the app list now rather than on the first keystroke
+
+        self.window = LauncherWindow(self, self._engine, self.config)
         self.window.set_problems(problems)
         self.window.realize()  # pay the first-show setup cost at startup, not on first use
         self._add_actions()
         self._watch_config()
         log.info("launcher started (config: %s)", paths.config_file())
+
+    def do_shutdown(self) -> None:
+        if self._usage is not None:
+            self._usage.close()
+        if self._favicons is not None:
+            self._favicons.shutdown()
+        Adw.Application.do_shutdown(self)
 
     def do_activate(self) -> None:
         # First activation comes from our own run(); later ones from e.g. `gapplication launch`.
@@ -91,6 +128,7 @@ class LauncherApp(Adw.Application):
             actions += [
                 ("debug-snapshot", "s", lambda p: self.window.save_snapshot(p.get_string())),
                 ("debug-set-query", "s", lambda p: self.window.set_query(p.get_string())),
+                ("debug-run-selected", None, lambda p: self.window.run_selected()),
             ]
         for name, ptype, handler in actions:
             action = Gio.SimpleAction.new(name, GLib.VariantType.new(ptype) if ptype else None)
@@ -117,6 +155,8 @@ class LauncherApp(Adw.Application):
         for w in warnings:
             log.warning("config: %s", w)
         self.config = config
+        self._engine.configure(config)
+        self._prefetch_icons()
         self.window.apply_config(config)
         self.window.set_problems(warnings)
         log.info("config reloaded")
@@ -138,6 +178,31 @@ class LauncherApp(Adw.Application):
     def quit_launcher(self) -> None:
         log.info("quit requested")
         self.quit()
+
+    def launch_app(self, app_id: str) -> None:
+        launching.launch_app(app_id, [], self._launch_context())
+
+    def open_uri(self, uri: str) -> None:
+        launching.open_uri(uri, self._launch_context())
+
+    def copy_text(self, text: str) -> None:
+        Gdk.Display.get_default().get_clipboard().set(text)
+
+    def _website_icon(self, url: str) -> str | None:
+        if not self.config.ui.favicons or self._favicons is None:
+            return None
+        return self._favicons.icon_for(url)
+
+    def _prefetch_icons(self) -> None:
+        for link in self.config.quicklinks:
+            if not link.icon:
+                self._website_icon(link.url)
+
+    @staticmethod
+    def _launch_context() -> Gio.AppLaunchContext:
+        # Carries an xdg-activation token, so GNOME focuses the launched app. The token
+        # is only valid while our window is focused: run actions before hiding it.
+        return Gdk.Display.get_default().get_app_launch_context()
 
     def notify_error(self, title: str, body: str) -> None:
         log.error("%s: %s", title, body)
@@ -188,5 +253,5 @@ def run_primary(initial: tuple[str, str | None] | None, debug: bool = False) -> 
             app.activate_action(name, GLib.Variant("s", param) if param else None)
         return 0
     for signum in (signal.SIGINT, signal.SIGTERM):
-        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, lambda: (app.quit(), True)[1])
+        GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, signum, lambda: (app.quit(), True)[1])
     return app.run(sys.argv[:1])

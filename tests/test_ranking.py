@@ -21,7 +21,7 @@ def test_bands_are_ordered():
     boundary = fuzzy_score("code", "Visual Studio Code")
     substring = fuzzy_score("ire", "Firefox")
     initials = fuzzy_score("vsc", "Visual Studio Code")
-    scattered = fuzzy_score("fex", "Firefox")
+    scattered = fuzzy_score("fef", "Firefox")
     assert exact > prefix > boundary > substring > initials > scattered
 
 
@@ -36,7 +36,13 @@ def test_boundary_substring_found_after_mid_word_occurrence():
 
 def test_initials_fall_back_to_plain_subsequence():
     assert fuzzy_score("fox", "firefox") is not None
-    assert fuzzy_score("ffx", "firefox") is not None
+    assert fuzzy_score("frfx", "firefox") is not None
+
+
+def test_scattered_letters_are_rejected():
+    assert fuzzy_score("fire", "LibreOffice Impress") is None
+    assert fuzzy_score("vsc", "Visual Studio Code") is not None  # word initials stay
+    assert fuzzy_score("lo w", "LibreOffice Writer") is not None
 
 
 def test_best_score_picks_highest_candidate_and_skips_empty():

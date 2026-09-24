@@ -19,3 +19,7 @@ def config_file() -> Path:
 
 def data_dir() -> Path:
     return _xdg("XDG_DATA_HOME", ".local/share") / "launcher"
+
+
+def cache_dir() -> Path:
+    return _xdg("XDG_CACHE_HOME", ".cache") / "launcher"
