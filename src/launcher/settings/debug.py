@@ -36,17 +36,19 @@ def snapshot(widget: Gtk.Widget, path: str) -> None:
 
 
 def render_all(window, directory: str) -> None:
-    from .dialogs import AppDialog, QuicklinkDialog, ShortcutDialog
+    from .dialogs import AppDialog, QuicklinkDialog, ShortcutDialog, SnippetDialog
 
     steps = []
-    for name in ("general", "shortcuts", "apps", "quicklinks", "clipboard", "files"):
+    for name in ("general", "shortcuts", "apps", "quicklinks", "snippets", "clipboard", "files"):
         steps.append((lambda n=name: window._stack.set_visible_child_name(n), f"page-{name}"))
     first_link = window.config.quicklinks[0].name if window.config.quicklinks else None
+    first_snippet = window.config.snippets[0].name if window.config.snippets else None
     apps = window.app_catalog()
     dialogs = [
         (lambda: AppDialog(window, apps[0].id).present(), "dialog-app"),
         (lambda: QuicklinkDialog(window, first_link).present(), "dialog-quicklink"),
         (lambda: QuicklinkDialog(window, None).present(), "dialog-quicklink-new"),
+        (lambda: SnippetDialog(window, first_snippet).present(), "dialog-snippet"),
         (
             lambda: ShortcutDialog(window, "Hotkey", "test", lambda k: None).present(),
             "dialog-shortcut",

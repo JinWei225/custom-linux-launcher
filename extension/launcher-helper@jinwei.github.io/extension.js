@@ -3,6 +3,7 @@
 //  * watch the clipboard (signal ClipboardChanged: content types + source app only)
 //  * read / write clipboard content (GetClipboard / SetClipboard)
 //  * remember the focused window and paste into it (GetFocusedWindow / Paste)
+//  * move the cursor back after pasting a snippet with {cursor} (MoveCursorLeft, v2)
 //
 // Everything else lives in the launcher (Python). Keep this file small: every change
 // needs a log out / log in on Wayland.
@@ -20,7 +21,8 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const VERSION = 1;
+const VERSION = 2;
+const MAX_CURSOR_MOVE = 5000;
 const LAUNCHER_BUS_NAME = 'io.github.jinwei.Launcher';
 const OBJECT_PATH = '/io/github/jinwei/LauncherHelper';
 const ERROR_PREFIX = 'io.github.jinwei.LauncherHelper.Error';
@@ -49,6 +51,9 @@ const IFACE = `
       <arg type="u" name="window_id" direction="in"/>
       <arg type="b" name="with_shift" direction="in"/>
       <arg type="b" name="pasted" direction="out"/>
+    </method>
+    <method name="MoveCursorLeft">
+      <arg type="u" name="count" direction="in"/>
     </method>
     <signal name="ClipboardChanged">
       <arg type="as" name="mimetypes"/>
@@ -195,6 +200,18 @@ class Helper {
             return GLib.SOURCE_REMOVE;
         });
         Main.activateWindow(win);
+    }
+
+    MoveCursorLeftAsync(params, invocation) {
+        if (this._denied(invocation))
+            return;
+        const [count] = params;
+        const time = Clutter.get_current_event_time() * 1000;
+        for (let i = 0; i < Math.min(count, MAX_CURSOR_MOVE); i++) {
+            this._virtualKeyboard.notify_keyval(time, Clutter.KEY_Left, Clutter.KeyState.PRESSED);
+            this._virtualKeyboard.notify_keyval(time, Clutter.KEY_Left, Clutter.KeyState.RELEASED);
+        }
+        invocation.return_value(null);
     }
 
     _sendPaste(withShift) {

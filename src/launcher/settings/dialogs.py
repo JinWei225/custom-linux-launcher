@@ -12,7 +12,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from .. import accel  # noqa: E402
-from ..config import AppSettings, QuickLink, hotkey_owners  # noqa: E402
+from ..config import AppSettings, QuickLink, Snippet, hotkey_owners  # noqa: E402
 from ..ranking import best_score  # noqa: E402
 
 if TYPE_CHECKING:
@@ -461,4 +461,141 @@ class QuicklinkDialog:
 
     def _delete(self) -> None:
         if not self._window.save(lambda w: w.delete_quicklink(self._original)):
+            self.dialog.close()
+
+
+# --- snippets ------------------------------------------------------------------------
+
+PLACEHOLDER_HELP = (
+    ("{date}", "today, like 2026-09-24"),
+    ("{date:%d %B %Y}", "any date or time format (strftime)"),
+    ("{clipboard}", "what you copied last"),
+    ("{cursor}", "where the cursor ends up"),
+)
+
+
+class SnippetDialog:
+    """Add or edit one snippet: name, body, trigger (espanso), alias and hotkey."""
+
+    def __init__(self, window: SettingsWindow, name: str | None, new_name: str = "") -> None:
+        self._window = window
+        self._original = name
+        snippet = next(
+            (s for s in window.config.snippets if name and s.name.casefold() == name.casefold()),
+            Snippet(name=new_name, body=""),
+        )
+        self.dialog, toolbar, header = _dialog("Edit Snippet" if name else "New Snippet", 560)
+        self.dialog.set_content_height(700)
+        _save_cancel(self.dialog, header, self._save)
+
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup()
+        self._name = Adw.EntryRow(title="Name", text=snippet.name)
+        self._trigger = Adw.EntryRow(
+            title="Trigger (typed anywhere, e.g. ;sig)", text=snippet.trigger
+        )
+        self._alias = Adw.EntryRow(title="Alias (exact search in the launcher)", text=snippet.alias)
+        for row in (self._name, self._trigger, self._alias):
+            row.connect("changed", lambda _e: self._validate())
+            group.add(row)
+        self._hotkey = HotkeyRow(
+            window,
+            "Hotkey",
+            f"snippet '{name}'" if name else "snippet (new)",
+            snippet.hotkey,
+            lambda _k: self._validate(),
+            subtitle="Pastes the snippet into the window you are in",
+        )
+        group.add(self._hotkey)
+        page.add(group)
+
+        body_group = Adw.PreferencesGroup(title="Text")
+        self._body = Gtk.TextView(
+            wrap_mode=Gtk.WrapMode.WORD_CHAR,
+            monospace=True,
+            top_margin=10,
+            bottom_margin=10,
+            left_margin=10,
+            right_margin=10,
+            accepts_tab=False,
+        )
+        self._body.get_buffer().set_text(snippet.body)
+        self._body.get_buffer().connect("changed", lambda _b: self._validate())
+        scroller = Gtk.ScrolledWindow(
+            child=self._body, min_content_height=180, max_content_height=360,
+            propagate_natural_height=True,
+        )  # fmt: skip
+        scroller.add_css_class("card")
+        body_group.add(scroller)
+        help_box = Gtk.Box(spacing=6, margin_top=8)
+        for text, tip in PLACEHOLDER_HELP:
+            button = Gtk.Button(label=text, tooltip_text=f"Insert {text}: {tip}")
+            button.add_css_class("caption")
+            button.connect("clicked", lambda _b, t=text: self._insert(t))
+            help_box.append(button)
+        body_group.add(help_box)
+        self._error = _error_label()
+        body_group.add(self._error)
+        page.add(body_group)
+
+        if name:
+            remove_group = Adw.PreferencesGroup()
+            remove = Adw.ButtonRow(title="Delete Snippet")
+            remove.add_css_class("destructive-action")
+            remove.connect("activated", lambda _r: self._delete())
+            remove_group.add(remove)
+            page.add(remove_group)
+        toolbar.set_content(page)
+        self._validate()
+
+    def present(self) -> None:
+        self.dialog.present(self._window)
+        (self._body if self._name.get_text() else self._name).grab_focus()
+
+    def _insert(self, text: str) -> None:
+        buffer = self._body.get_buffer()
+        buffer.insert_at_cursor(text)
+        self._body.grab_focus()
+
+    def _snippet(self) -> Snippet:
+        buffer = self._body.get_buffer()
+        return Snippet(
+            name=self._name.get_text().strip(),
+            body=buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False),
+            trigger=self._trigger.get_text().strip(),
+            alias=self._alias.get_text().strip(),
+            hotkey=self._hotkey.hotkey,
+        )
+
+    def _validate(self) -> bool:
+        snippet = self._snippet()
+        problems = {
+            self._name: not snippet.name and "A name is required.",
+            self._trigger: (
+                any(ch.isspace() for ch in snippet.trigger) and "The trigger can't contain spaces."
+            )
+            or (len(snippet.trigger) == 1 and "The trigger needs at least 2 characters."),
+            self._alias: any(ch.isspace() for ch in snippet.alias)
+            and "The alias can't contain spaces.",
+        }
+        for row, problem in problems.items():
+            (row.add_css_class if problem else row.remove_css_class)("error")
+        message = next((p for p in problems.values() if p), None)
+        if message is None and not snippet.body:
+            message = "The text is empty."
+        _show_error(self._error, message)
+        return message is None
+
+    def _save(self) -> None:
+        if not self._validate():
+            return
+        snippet = self._snippet()
+        error = self._window.save(lambda w: w.save_snippet(self._original, snippet))
+        if error:
+            _show_error(self._error, error)
+        else:
+            self.dialog.close()
+
+    def _delete(self) -> None:
+        if not self._window.save(lambda w: w.delete_snippet(self._original)):
             self.dialog.close()

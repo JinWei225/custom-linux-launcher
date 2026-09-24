@@ -12,13 +12,13 @@ from .store import UsageStore
 
 log = logging.getLogger(__name__)
 
-# Providers queried in each mode, in tie-break order. Later milestones fill in the rest.
+# Providers queried in each mode, in tie-break order.
 MODES: dict[str, tuple[str, ...]] = {
-    "all": ("apps", "quicklinks", "commands", "websearch"),
+    "all": ("apps", "quicklinks", "snippet-search", "commands", "websearch"),
     "apps": ("apps",),
     "files": ("files",),
     "clipboard": ("clipboard",),
-    "snippets": (),
+    "snippets": ("snippets",),
 }
 
 # final score = match score * (1 + FRECENCY_WEIGHT * boost), boost in [0, 1).

@@ -60,7 +60,7 @@ def main() -> int:
     else:
         check("extension answers GetVersion", False, "no answer after 10 s")
         return 1
-    check("extension answers GetVersion", version == 1, str(version))
+    check("extension answers GetVersion", version == 2, str(version))
 
     # 2. Before we own the launcher's name, protected methods are refused.
     try:
@@ -151,6 +151,19 @@ def main() -> int:
         "with_shift sends Ctrl+Shift+V",
         any(k["ctrl"] and k["shift"] for k in keys),
         repr(keys),
+    )
+
+    # 6. MoveCursorLeft (snippets with {cursor}).
+    texts += [e["text"] for e in events if e["event"] == "text"]
+    events.clear()
+    call("MoveCursorLeft", GLib.Variant("(u)", (3,)))
+    read_events(1.0)
+    lefts = [e for e in events if e["event"] == "key" and e["keyval"] == "Left"]
+    cursor = [e["position"] for e in events if e["event"] == "cursor"]
+    check(
+        "MoveCursorLeft presses Left",
+        len(lefts) == 3 and cursor[-1:] == [len(texts[-1]) - 3],
+        f"{len(lefts)} lefts, cursor {cursor}",
     )
 
     missing = call("Paste", GLib.Variant("(ub)", (987654, False))).unpack()[0]

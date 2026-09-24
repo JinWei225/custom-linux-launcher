@@ -44,6 +44,19 @@ class AppSettings:
 
 
 @dataclass(frozen=True)
+class Snippet:
+    """Text pasted from the launcher and/or expanded by espanso when its trigger is typed.
+
+    body may contain {date}, {date:<strftime format>}, {clipboard} and {cursor}."""
+
+    name: str
+    body: str
+    trigger: str = ""  # typed expansion, e.g. ";sig" (espanso)
+    alias: str = ""  # exact-match search keyword in the launcher
+    hotkey: str = ""  # global shortcut that pastes the snippet
+
+
+@dataclass(frozen=True)
 class ShortcutsConfig:
     """Global shortcuts for the launcher's modes ("" = not bound)."""
 
@@ -51,7 +64,7 @@ class ShortcutsConfig:
     files: str = "<Super><Shift>f"
     clipboard: str = "<Super><Shift>v"
     clipboard_pause: str = "<Super><Shift>p"  # pause / resume clipboard recording
-    snippets: str = ""  # bound once snippets exist (M5)
+    snippets: str = "<Super><Shift>s"
 
 
 # Password managers: never record what they copy (they also mark secrets with a hint).
@@ -124,6 +137,10 @@ class Config:
     quicklinks: tuple[QuickLink, ...] = field(
         default_factory=tuple, metadata={"items": QuickLink, "key": "quicklink"}
     )
+    # Normally kept in snippets.toml next to config.toml (see load_config).
+    snippets: tuple[Snippet, ...] = field(
+        default_factory=tuple, metadata={"items": Snippet, "key": "snippet"}
+    )
 
 
 # Inclusive (min, max) bounds for numeric settings, keyed by "section.key".
@@ -163,6 +180,7 @@ launcher = "<Super><Shift>Return"
 files = "<Super><Shift>f"
 clipboard = "<Super><Shift>v"
 clipboard_pause = "<Super><Shift>p"
+snippets = "<Super><Shift>s"
 
 # Clipboard history (Super+Shift+V). Needs the Launcher Helper GNOME extension.
 [clipboard]
@@ -202,13 +220,47 @@ fallback = true
 # name = "GitHub"
 # alias = "gh"
 # url = "https://github.com/"
+
+# Snippets live in snippets.toml in this folder (edit them in Launcher Settings).
 """
 
+SNIPPETS_HEADER = '''\
+# Launcher snippets. Edit them in Launcher Settings -> Snippets, or here by hand.
+# Snippets with a trigger are expanded as you type by espanso (the launcher writes
+# ~/.config/espanso/match/launcher.yml from this file). Placeholders in the body:
+#   {date}  {date:%d %B %Y}  {clipboard}  {cursor}
+#
+# [[snippet]]
+# name = "Email signature"
+# trigger = ";sig"
+# alias = "sig"
+# body = """
+# Best regards,
+# Jinwei"""
 
-def parse_config(data: dict[str, Any]) -> tuple[Config, list[str]]:
-    """Build a Config from parsed TOML. Returns the config and non-fatal warnings."""
+'''
+
+
+def snippets_file(config_path: Path) -> Path:
+    return config_path.with_name("snippets.toml")
+
+
+def parse_config(
+    data: dict[str, Any], snippets: dict[str, Any] | None = None
+) -> tuple[Config, list[str]]:
+    """Build a Config from parsed TOML (config.toml, plus snippets.toml if given).
+    Returns the config and non-fatal warnings."""
     warnings: list[str] = []
     data = dict(data)
+    if snippets is not None:
+        extra = snippets.get("snippet", [])
+        for key in snippets:
+            if key != "snippet":
+                warnings.append(f"snippets.toml: unknown setting '{key}' ignored")
+        if not isinstance(extra, list):
+            raise ConfigError("snippets.toml: snippets must be [[snippet]] tables")
+        own = data.get("snippet", [])
+        data["snippet"] = (own if isinstance(own, list) else [own]) + extra
     legacy = data.pop("aliases", None)
     if legacy:
         raise ConfigError(
@@ -217,23 +269,36 @@ def parse_config(data: dict[str, Any]) -> tuple[Config, list[str]]:
         )
     config = _build(Config, data, "", warnings)
     _check_links_and_aliases(config)
+    _check_snippets(config)
     _check_hotkeys(config)
     return config, warnings
 
 
 def load_config(path: Path) -> tuple[Config, list[str]]:
-    """Load the config file, falling back to defaults when it does not exist."""
+    """Load config.toml and snippets.toml; a missing file counts as empty."""
+    return parse_texts(_read(path), _read(snippets_file(path)))
+
+
+def parse_texts(config_text: str | None, snippets_text: str | None) -> tuple[Config, list[str]]:
+    data = _loads(config_text, "config.toml") if config_text is not None else {}
+    snippets = _loads(snippets_text, "snippets.toml") if snippets_text is not None else None
+    return parse_config(data, snippets)
+
+
+def _read(path: Path) -> str | None:
     try:
-        text = path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return Config(), []
+        return None
     except OSError as e:
         raise ConfigError(f"cannot read {path}: {e}") from e
+
+
+def _loads(text: str, name: str) -> dict[str, Any]:
     try:
-        data = tomllib.loads(text)
+        return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
-        raise ConfigError(f"{path.name}: {e}") from e
-    return parse_config(data)
+        raise ConfigError(f"{name}: {e}") from e
 
 
 def ensure_config(path: Path) -> None:
@@ -332,6 +397,8 @@ def _check_links_and_aliases(config: Config) -> None:
 
     for app_id, app in config.apps.items():
         claim(app.alias, f"app '{app_id}'")
+    for snippet in config.snippets:
+        claim(snippet.alias, f"snippet '{snippet.name}'")
     for i, link in enumerate(config.quicklinks, 1):
         owner = f"quicklink '{link.name}'"
         if "://" not in link.url and not link.url.startswith("mailto:"):
@@ -344,6 +411,31 @@ def _check_links_and_aliases(config: Config) -> None:
         raise ConfigError("two quicklinks have the same name; names must be unique")
 
 
+def _check_snippets(config: Config) -> None:
+    names: set[str] = set()
+    triggers: dict[str, str] = {}
+    for snippet in config.snippets:
+        owner = f"snippet '{snippet.name}'"
+        if not snippet.name.strip():
+            raise ConfigError("every snippet needs a name")
+        if snippet.name.casefold() in names:
+            raise ConfigError(f"two snippets are named '{snippet.name}'; names must be unique")
+        names.add(snippet.name.casefold())
+        if not snippet.body:
+            raise ConfigError(f"{owner} has an empty body")
+        if snippet.trigger:
+            if any(ch.isspace() for ch in snippet.trigger):
+                raise ConfigError(f"{owner}: trigger {snippet.trigger!r} must not contain spaces")
+            if len(snippet.trigger) < 2:
+                raise ConfigError(f"{owner}: trigger {snippet.trigger!r} is too short")
+            if snippet.trigger in triggers:
+                raise ConfigError(
+                    f"trigger '{snippet.trigger}' is used by both {triggers[snippet.trigger]} "
+                    f"and {owner}"
+                )
+            triggers[snippet.trigger] = owner
+
+
 def hotkey_owners(config: Config) -> list[tuple[str, str]]:
     """(hotkey, owner description) for every hotkey set in the config."""
     owners = [
@@ -352,6 +444,7 @@ def hotkey_owners(config: Config) -> list[tuple[str, str]]:
     ]
     owners += [(app.hotkey, f"app '{app_id}'") for app_id, app in config.apps.items()]
     owners += [(link.hotkey, f"quicklink '{link.name}'") for link in config.quicklinks]
+    owners += [(s.hotkey, f"snippet '{s.name}'") for s in config.snippets]
     return [(key, owner) for key, owner in owners if key]
 
 

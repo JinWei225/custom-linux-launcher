@@ -23,3 +23,8 @@ def data_dir() -> Path:
 
 def cache_dir() -> Path:
     return _xdg("XDG_CACHE_HOME", ".cache") / "launcher"
+
+
+def espanso_match_dir() -> Path:
+    """Where espanso reads its snippets from (its default location)."""
+    return _xdg("XDG_CONFIG_HOME", ".config") / "espanso" / "match"

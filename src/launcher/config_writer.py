@@ -9,53 +9,56 @@ An edit that would produce an invalid config raises ConfigError and writes nothi
 from __future__ import annotations
 
 import os
-import tomllib
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
 import tomlkit
-from tomlkit.items import AoT, Table
+from tomlkit.items import AoT, String, StringType, Table, Trivia
 
 from .config import (
+    SNIPPETS_HEADER,
     AppSettings,
     Config,
     ConfigError,
     QuickLink,
+    Snippet,
     ensure_config,
-    parse_config,
+    parse_texts,
+    snippets_file,
 )
 
 Edit = Callable[[tomlkit.TOMLDocument], None]
 
 
 class ConfigWriter:
+    """Edits config.toml, or snippets.toml (next to it) with snippets=True."""
+
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.snippets_path = snippets_file(path)
 
     def load(self) -> Config:
         ensure_config(self.path)
-        return self._validate(self.path.read_text(encoding="utf-8"))
-
-    def edit(self, change: Edit) -> Config:
-        ensure_config(self.path)
-        doc = tomlkit.parse(self.path.read_text(encoding="utf-8"))
-        change(doc)
-        text = tomlkit.dumps(doc).rstrip("\n") + "\n"  # removed tables leave blank lines
-        config = self._validate(text)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, self.path)
+        config, _warnings = parse_texts(_read(self.path), _read(self.snippets_path))
         return config
 
-    @staticmethod
-    def _validate(text: str) -> Config:
-        try:
-            data = tomllib.loads(text)
-        except tomllib.TOMLDecodeError as e:
-            raise ConfigError(str(e)) from e
-        config, _warnings = parse_config(data)
+    def edit(self, change: Edit, snippets: bool = False) -> Config:
+        ensure_config(self.path)
+        path = self.snippets_path if snippets else self.path
+        original = _read(path)
+        if original is None:  # only snippets.toml can be missing
+            original = SNIPPETS_HEADER
+        doc = tomlkit.parse(original)
+        change(doc)
+        text = tomlkit.dumps(doc).rstrip("\n") + "\n"  # removed tables leave blank lines
+        # Validate together with the other file: aliases and hotkeys span both.
+        if snippets:
+            config, _warnings = parse_texts(_read(self.path), text)
+        else:
+            config, _warnings = parse_texts(text, _read(self.snippets_path))
+        write_atomic(path, text)
         return config
 
     # --- typed helpers ---------------------------------------------------------------
@@ -94,12 +97,12 @@ class ConfigWriter:
         """Update the quicklink named `original_name`, or append a new one if None."""
 
         def change(doc: tomlkit.TOMLDocument) -> None:
-            links = _links(doc)
+            links = _aot(doc, "quicklink")
             if original_name is None:
                 table = tomlkit.table()
                 links.append(table)
             else:
-                table = links[_find_link(links, original_name)]
+                table = links[_find(links, original_name, "quicklink")]
             for f in fields(QuickLink):
                 value = getattr(link, f.name)
                 if f.name in ("name", "url"):
@@ -111,8 +114,8 @@ class ConfigWriter:
 
     def delete_quicklink(self, name: str) -> Config:
         def change(doc: tomlkit.TOMLDocument) -> None:
-            links = _links(doc)
-            del links[_find_link(links, name)]
+            links = _aot(doc, "quicklink")
+            del links[_find(links, name, "quicklink")]
 
         return self.edit(change)
 
@@ -120,8 +123,8 @@ class ConfigWriter:
         """Move up (-1) or down (+1); order decides the order of fallback searches."""
 
         def change(doc: tomlkit.TOMLDocument) -> None:
-            links = _links(doc)
-            i = _find_link(links, name)
+            links = _aot(doc, "quicklink")
+            i = _find(links, name, "quicklink")
             j = max(0, min(len(links) - 1, i + delta))
             if i != j:
                 item = links[i]
@@ -130,6 +133,93 @@ class ConfigWriter:
 
         return self.edit(change)
 
+    def save_snippet(self, original_name: str | None, snippet: Snippet) -> Config:
+        """Update the snippet named `original_name`, or append a new one if None."""
+
+        def change(doc: tomlkit.TOMLDocument) -> None:
+            snippets = _aot(doc, "snippet")
+            if original_name is None:
+                table = tomlkit.table()
+                snippets.append(table)
+            else:
+                table = snippets[_find(snippets, original_name, "snippet")]
+            _put(table, "name", snippet.name)
+            for key in ("trigger", "alias", "hotkey"):
+                _set_or_drop(table, key, getattr(snippet, key))
+            if "body" in table:
+                del table["body"]  # keep the body last: it may span many lines
+            table["body"] = body_string(snippet.body)
+
+        return self.edit(change, snippets=True)
+
+    def add_snippets(self, snippets: list[Snippet]) -> Config:
+        """Append several snippets in one write (used by the espanso import)."""
+
+        def change(doc: tomlkit.TOMLDocument) -> None:
+            tables = _aot(doc, "snippet")
+            for snippet in snippets:
+                table = tomlkit.table()
+                table["name"] = snippet.name
+                for key in ("trigger", "alias", "hotkey"):
+                    if value := getattr(snippet, key):
+                        table[key] = value
+                table["body"] = body_string(snippet.body)
+                tables.append(table)
+
+        return self.edit(change, snippets=True)
+
+    def delete_snippet(self, name: str) -> Config:
+        def change(doc: tomlkit.TOMLDocument) -> None:
+            snippets = _aot(doc, "snippet")
+            del snippets[_find(snippets, name, "snippet")]
+
+        return self.edit(change, snippets=True)
+
+
+def write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def body_string(body: str) -> tomlkit.items.String:
+    """Multi-line bodies become triple-quoted strings, so they stay readable."""
+    if "\n" not in body:
+        return tomlkit.string(body)
+    plain = tomlkit.string(body, multiline=True)
+    if body.startswith("\n"):
+        return plain  # tomlkit already writes the opening quotes on a line of their own
+    # TOML drops a newline right after the opening quotes, so start the text on the
+    # next line: body = """⏎Best regards,⏎Jinwei""" rather than """Best regards,…
+    try:
+        return String(StringType.MLB, body, "\n" + plain.as_string()[3:-3], Trivia())
+    except Exception:  # private API changed: the plain form is still correct
+        return plain
+
+
+def _read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise ConfigError(f"cannot read {path}: {e}") from e
+
+
+def _aot(doc: tomlkit.TOMLDocument, key: str) -> AoT:
+    items = doc.get(key)
+    if items is None:
+        items = tomlkit.aot()
+        doc[key] = items
+    return items
+
+
+def _find(items: AoT, name: str, kind: str) -> int:
+    for i, table in enumerate(items):
+        if str(table.get("name", "")).casefold() == name.casefold():
+            return i
+    raise ConfigError(f"{kind} '{name}' no longer exists")
+
 
 def _table(doc: tomlkit.TOMLDocument, section: str) -> Table:
     table = doc.get(section)
@@ -137,21 +227,6 @@ def _table(doc: tomlkit.TOMLDocument, section: str) -> Table:
         table = tomlkit.table()
         doc[section] = table
     return table
-
-
-def _links(doc: tomlkit.TOMLDocument) -> AoT:
-    links = doc.get("quicklink")
-    if links is None:
-        links = tomlkit.aot()
-        doc["quicklink"] = links
-    return links
-
-
-def _find_link(links: AoT, name: str) -> int:
-    for i, table in enumerate(links):
-        if str(table.get("name", "")).casefold() == name.casefold():
-            return i
-    raise ConfigError(f"quicklink '{name}' no longer exists in the config file")
 
 
 def _set_or_drop(table: Table, key: str, value: Any) -> None:

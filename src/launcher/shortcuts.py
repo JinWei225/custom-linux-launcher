@@ -102,6 +102,16 @@ def desired_bindings(config: Config, command: str) -> list[Binding]:
                     link.hotkey,
                 )
             )
+    for snippet in config.snippets:
+        if snippet.hotkey:
+            bindings.append(
+                Binding(
+                    f"{OWNED_PREFIX}snippet-{slug(snippet.name)}",
+                    f"Launcher: {snippet.name}",
+                    f"{run} --run {shlex.quote('snippet:' + snippet.name)}",
+                    snippet.hotkey,
+                )
+            )
     return bindings
 
 

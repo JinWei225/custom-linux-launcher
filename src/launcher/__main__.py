@@ -6,8 +6,9 @@ launcher --show / --hide    show or hide without toggling
 launcher --reload | --quit  control the running daemon
 launcher --daemon           start in the background (used by the systemd unit)
 launcher --import-ulauncher print Ulauncher shortcuts as [[quicklink]] TOML
-launcher --run app:ID       launch an app / quicklink (what hotkeys run)
-launcher --settings [--edit app:ID|quicklink:NAME]   open Launcher Settings
+launcher --import-espanso   move espanso's base.yml matches into snippets.toml
+launcher --run app:ID       launch an app / quicklink / snippet (what hotkeys run)
+launcher --settings [--edit app:ID|quicklink:NAME|snippet:NAME]   open Launcher Settings
 launcher --clipboard-pause  pause / resume clipboard recording
 """
 
@@ -29,7 +30,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     group.add_argument("--reload", action="store_true", help="reload the config file")
     group.add_argument("--quit", action="store_true", help="stop the running launcher")
     group.add_argument("--daemon", action="store_true", help="start hidden in the background")
-    group.add_argument("--run", metavar="ITEM", help="run app:<desktop id> or quicklink:<name>")
+    group.add_argument(
+        "--run", metavar="ITEM", help="run app:<desktop id>, quicklink:<name> or snippet:<name>"
+    )
     group.add_argument("--settings", action="store_true", help="open Launcher Settings")
     group.add_argument(
         "--clipboard-pause", action="store_true", help="pause / resume clipboard recording"
@@ -40,6 +43,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--import-ulauncher",
         action="store_true",
         help="print Ulauncher shortcuts as [[quicklink]] entries for config.toml",
+    )
+    group.add_argument(
+        "--import-espanso",
+        action="store_true",
+        help="move espanso's base.yml matches into snippets.toml (keeps base.yml.bak)",
     )
     parser.add_argument("--debug", action="store_true", help="verbose logging")
     return parser.parse_args(argv)
@@ -68,6 +76,22 @@ def main(argv: list[str] | None = None) -> int:
         from .importers import import_ulauncher
 
         print(import_ulauncher(), end="")
+        return 0
+
+    if args.import_espanso:
+        from . import paths
+        from .config import ConfigError
+        from .config_writer import ConfigWriter
+        from .importers import espanso_base, import_espanso
+
+        try:
+            moved = import_espanso(ConfigWriter(paths.config_file()), espanso_base())
+        except (ConfigError, OSError, ValueError) as e:
+            print(f"launcher: nothing imported: {e}", file=sys.stderr)
+            return 1
+        for snippet in moved:
+            print(f"moved {snippet.trigger}  ->  {snippet.name}")
+        print(f"{len(moved)} snippet(s) moved to {paths.config_dir() / 'snippets.toml'}")
         return 0
 
     if args.settings:

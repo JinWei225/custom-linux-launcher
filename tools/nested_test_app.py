@@ -2,12 +2,14 @@
 
 Every line it prints is JSON so the driver can parse it:
     {"event": "ready"} / {"event": "key", "keyval": "v", "ctrl": true, ...} /
-    {"event": "text", "text": "..."} / {"event": "copied"}
+    {"event": "text", "text": "..."} / {"event": "cursor", "position": 3} /
+    {"event": "copied"} / {"event": "clipboard", "text": "..."}
 
 It also takes commands on stdin, one per line:
     copy <text>          put text on the clipboard (as a real app would)
     copy-image <path>    put a PNG file on the clipboard
     clear                empty the entry
+    read-clipboard       report the clipboard's text
 """
 
 import json
@@ -28,6 +30,9 @@ def on_activate(app):
     window = Gtk.ApplicationWindow(application=app, title="nested-test-app")
     entry = Gtk.Entry()
     entry.connect("changed", lambda e: emit(event="text", text=e.get_text()))
+    entry.connect(
+        "notify::cursor-position", lambda e, _p: emit(event="cursor", position=e.get_position())
+    )
     keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
 
     def on_key(_ctrl, keyval, _code, state):
@@ -60,6 +65,15 @@ def on_activate(app):
             emit(event="copied")
         elif command == "clear":
             entry.set_text("")
+        elif command == "read-clipboard":
+
+            def done(cb, result):
+                try:
+                    emit(event="clipboard", text=cb.read_text_finish(result))
+                except GLib.Error as e:
+                    emit(event="clipboard", error=e.message)
+
+            clipboard.read_text_async(None, done)
         return GLib.SOURCE_CONTINUE
 
     GLib.io_add_watch(GLib.IOChannel.unix_new(0), GLib.PRIORITY_DEFAULT, GLib.IO_IN, on_stdin)

@@ -48,6 +48,7 @@ class Helper:
     def __init__(self) -> None:
         self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         self.available = False
+        self.version = 0
         self._on_available: list[Callable[[bool], None]] = []
         # Re-check whenever GNOME Shell (re)starts or the extension is toggled.
         self._watch = Gio.bus_watch_name_on_connection(
@@ -66,8 +67,8 @@ class Helper:
 
     def _on_version(self, bus, result) -> None:
         try:
-            version = bus.call_finish(result).unpack()[0]
-            log.info("Launcher Helper extension v%d is active", version)
+            self.version = bus.call_finish(result).unpack()[0]
+            log.info("Launcher Helper extension v%d is active", self.version)
             self._set_available(True)
         except GLib.Error:
             self._set_available(False)
@@ -143,4 +144,11 @@ class Helper:
         self._bus.call(
             DEST, PATH, IFACE, "Paste", GLib.Variant("(ub)", (target.window_id, with_shift)),
             GLib.VariantType("(b)"), Gio.DBusCallFlags.NONE, 3000, None, done,
+        )  # fmt: skip
+
+    def cursor_left(self, count: int) -> None:
+        """Press Left `count` times in the focused window (extension v2+)."""
+        self._bus.call(
+            DEST, PATH, IFACE, "MoveCursorLeft", GLib.Variant("(u)", (count,)), None,
+            Gio.DBusCallFlags.NONE, 3000, None, None,
         )  # fmt: skip

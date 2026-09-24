@@ -77,9 +77,11 @@ Why the design is split this way:
 
 **Recommendation: A.**
 
-### 🔶 D3 — Snippet expansion while typing (needed for M5) — **leaning A, check again in M5**
+### ✅ D3 — Snippet expansion while typing — **decided: A1 (espanso expands; snippets.toml is the master copy)**
 
 **Status 2026-09-24:** typing in all three input languages works with espanso plus the gsettings fix. Keep option A for now. During M5, check whether setting up and editing text snippets (espanso reloading its match files) makes it flash its window. If espanso still causes trouble there, switch to option B. (Hotkeys were checked in M3 and are fine.)
+
+**M5 check 2026-09-24:** every change to a file in espanso's match folder restarts its worker, and the restart takes focus away from the active window. In 3 tries the launcher lost focus for ~5 ms twice, and once for long enough to hide. Typing and expanding cause no flash. **Decision: keep espanso.** The flash only happens when a snippet is saved, and the launcher rewrites `launcher.yml` only when its content actually changes (not on start, reload or unrelated edits). Several quick edits are debounced by espanso into one restart.
 | Option | Pros | Cons |
 |---|---|---|
 | **A. espanso does the expansion; launcherd manages the snippets** | Already installed, proven on Wayland; snippet storage is our own | Relies on espanso's reliability; it needs to run with an `input` group or uinput capability |
@@ -209,7 +211,15 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - **Pause:** Super+Shift+P (`launcher --clipboard-pause`, or the Pause/Resume command) toggles recording and shows a notification. It isn't persisted, so recording is always back on after a restart.
 - **Testing without logging out:** `tools/nested-shell.sh` runs a private headless GNOME Shell (`--headless --virtual-monitor`) with its own session bus and settings. `make test-extension` runs 13 extension checks there, and `tools/nested-shell.sh .venv/bin/python tools/nested_e2e_test.py [snapshot dir]` runs 12 end-to-end checks with the real daemon and a GTK test app (copy, image, paste back, pause, terminal paste).
 
-### 4.4 Snippet format (if D3 = A1)
+### 4.4 Snippets (M5, as built)
+- **Storage:** `~/.config/launcher/snippets.toml` (`[[snippet]]` with `name`, `body`, optional `trigger`, `alias`, `hotkey`). It is loaded and validated together with config.toml: names and triggers must be unique, triggers can't contain spaces and need at least 2 characters, and aliases and hotkeys share the same namespace as apps and quicklinks. Launcher Settings → Snippets edits it (multi-line editor, placeholder buttons, hotkey recording).
+- **espanso:** the daemon writes `~/.config/espanso/match/launcher.yml` (JSON-quoted YAML, no YAML library) for snippets that have a trigger. `{date:fmt}` becomes a `date` var, `{clipboard}` becomes a `clipboard` var, and `{cursor}` becomes `$|$`. The file is written only when its content changes, and removed when no snippet has a trigger.
+- **Import:** `launcher --import-espanso` (or the "Move Here" button in Settings) moves simple matches (a single trigger, `replace`, date/clipboard vars, `label`) from espanso's base.yml into snippets.toml. It keeps `base.yml.bak`, and leaves matches that need espanso features (shell vars, `word`, regex, forms…) in base.yml. **Done 2026-09-24:** 7 moved, `:shell` kept.
+- **Launcher:** Super+Shift+S opens snippets mode, which lists every snippet with a preview pane. Snippets also appear in the main search by name, trigger or alias (an exact alias ranks first). Enter pastes, Alt+Enter copies, Ctrl+E edits, and "New Snippet “…”" opens Settings with the name filled in. A snippet hotkey runs `launcher --run snippet:<name>` and pastes into the focused window.
+- **Paste flow:** the daemon fills in the placeholders (`{clipboard}` read through the extension), puts the text on the clipboard, and pastes it like a clipboard entry. The recorder skips the pasted text, so snippets never enter the history. 500 ms later, the entry that was on the clipboard before is put back, if it was a recorded entry (never a password or an excluded app's copy). `{cursor}` presses Left through the extension's `MoveCursorLeft` (extension v2, needs a new login).
+- **Tests:** `tests/test_snippets.py` (placeholders, YAML, config validation, writer round trips, import). The nested end-to-end test adds 6 snippet checks: {clipboard}, {cursor}, not recorded, clipboard put back, `--run snippet:`, and espanso regeneration after an edit.
+
+Format:
 ```toml
 [[snippet]]
 name = "Email signature"
@@ -290,7 +300,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M2** ✅ | File search over configured folders, open and reveal-in-folder actions | ✅ D5 = A | Finding a new download takes under 1 s after it lands. **Built 2026-09-24:** new files show up in about 0.5 s; Super+Shift+F added early |
 | **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
-| **M5** | Snippets: launcher search and paste; espanso YAML generation; placeholders | D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher |
+| **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
 | **M6** | Polish: preferences window (if D6 = B), themes, per-item hotkeys, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)
@@ -308,7 +318,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 - **Focus loss vs. Shell popups:** GTK's `is-active` follows keyboard focus, which GNOME Shell also takes while its own popups are open (the Super+Space input switcher, Alt+Tab, polkit). Hiding on that closed the launcher whenever you switched input source. The launcher now hides only when the compositor says another window is focused (`Gdk.ToplevelState.FOCUSED`). Tested with a polkit dialog (stays open) and a new window (hides).
 - **Input methods:** while Pinyin or Hangul is composing text, the window leaves Enter, the arrow keys and Esc to the input method. The window tracks this with GtkText `preedit-changed`. Check it by hand with real Pinyin input.
 - ~~**Clipboard watching in GNOME 50:**~~ Not needed: the extension watches `Meta.Selection` directly, and was tested in a nested GNOME Shell 50.
-- **espanso on Wayland** needs its uinput and evdev permissions set up. Check `espanso status` before M5.
+- ~~**espanso on Wayland**~~ needs its uinput and evdev permissions set up. Checked in M5: running, and it loads the generated launcher.yml.
 - **Image paste** only works if the target app accepts `image/png` from the clipboard. Some Electron apps only accept file URIs. We could also offer `text/uri-list` pointing at the stored PNG.
 
 ---
@@ -319,7 +329,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 |---|---|---|---|---|
 | D1 | Language/toolkit | Python + PyGObject (GTK4/libadwaita) | 2026-09-24 | |
 | D2 | UI host | GTK4 window + thin Shell extension | 2026-09-24 | |
-| D3 | Typed expansion | espanso (A), provisional | 2026-09-24 | IBus ruled out (pinyin/hangul in use). Check again in M5 when snippets are set up; option B if espanso still flashes |
+| D3 | Typed expansion | espanso (A1): snippets.toml is the master copy; launcher writes espanso's launcher.yml | 2026-09-24 | IBus ruled out (pinyin/hangul in use). M5 check: espanso takes focus briefly whenever the snippet file changes; accepted because it only happens on save and writes are skipped when nothing changed. Existing base.yml matches moved in (backup kept) |
 | D4 | Paste keystroke | Shell extension virtual keyboard (A) | 2026-09-24 | Extension only answers the launcher's bus name owner |
 | D5 | File search backend | Own in-memory index + Gio.FileMonitor (A) | 2026-09-24 | |
 | D6 | Config style | TOML + Launcher Settings window (B) | 2026-09-24 | Every GUI edit is validated before it is written; comments preserved (tomlkit) |

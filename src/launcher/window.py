@@ -41,6 +41,7 @@ PREVIEW_WIDTH = 380
 LIST_LIMIT_PREVIEW_MODES = 200
 FOOTERS = {
     "clipboard": "Enter paste · Alt+Enter copy only · Ctrl+Shift+P pin · Ctrl+Del delete",
+    "snippets": "Enter paste · Alt+Enter copy only · Ctrl+E edit",
 }
 
 _NUMBER_KEYS = {getattr(Gdk, f"KEY_{n}"): n for n in range(1, 10)}
@@ -397,7 +398,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.hide_launcher()
 
     def _edit_selected(self) -> None:
-        """Ctrl+E: open Launcher Settings at the selected app or quicklink."""
+        """Ctrl+E: open Launcher Settings at the selected app, quicklink or snippet."""
         row = self._list.get_selected_row()
         if row is None:
             return
@@ -523,6 +524,8 @@ def edit_target(result_id: str) -> str | None:
         return result_id
     if kind in ("quicklink", "websearch"):
         return f"quicklink:{key}"
+    if kind == "snippet":
+        return result_id
     return None
 
 

@@ -1,13 +1,17 @@
 import shlex
 
-from launcher.config import AppSettings, Config, QuickLink, ShortcutsConfig
+from launcher.config import AppSettings, Config, QuickLink, ShortcutsConfig, Snippet
 from launcher.shortcuts import OWNED_PREFIX, _is_owned, _runs_launcher, desired_bindings, slug
 
 
 def test_desired_bindings_cover_modes_apps_and_links():
     config = Config(
         shortcuts=ShortcutsConfig(
-            launcher="<Control>space", files="<Super><Shift>f", clipboard="", clipboard_pause=""
+            launcher="<Control>space",
+            files="<Super><Shift>f",
+            clipboard="",
+            clipboard_pause="",
+            snippets="",
         ),
         apps={
             "code.desktop": AppSettings("code", "<Super><Shift>c"),
@@ -17,6 +21,7 @@ def test_desired_bindings_cover_modes_apps_and_links():
             QuickLink("Git Hub", "https://github.com", hotkey="<Super><Shift>g"),
             QuickLink("No Key", "https://a.b"),
         ),
+        snippets=(Snippet("Sig", "Best", hotkey="<Super><Shift>1"), Snippet("None", "x")),
     )
     bindings = {b.key: b for b in desired_bindings(config, "/home/u/.local/bin/launcher")}
     assert bindings["launcher-main"].command == "/home/u/.local/bin/launcher"
@@ -26,7 +31,9 @@ def test_desired_bindings_cover_modes_apps_and_links():
     assert shlex.split(app.command)[-2:] == ["--run", "app:code.desktop"]
     link = next(b for k, b in bindings.items() if k.startswith(OWNED_PREFIX + "link-"))
     assert shlex.split(link.command)[-1] == "quicklink:Git Hub"  # quoted: name has a space
-    assert len(bindings) == 4
+    snippet = next(b for k, b in bindings.items() if k.startswith(OWNED_PREFIX + "snippet-"))
+    assert shlex.split(snippet.command)[-1] == "snippet:Sig"
+    assert len(bindings) == 5
 
 
 def test_slug_is_dconf_safe_and_distinct():

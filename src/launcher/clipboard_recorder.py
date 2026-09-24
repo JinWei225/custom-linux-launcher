@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 
 import gi
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 
 ICON_SIZE = 64
 PREVIEW_SIZE = 480
+SKIP_SECONDS = 5
 
 
 def make_thumbnails(data: bytes) -> tuple[int, int, bytes, bytes]:
@@ -61,9 +63,20 @@ class ClipboardRecorder:
         self._config = config
         self._on_added = on_added
         self.paused = False
+        # The history entry the clipboard holds right now, if known. A snippet paste
+        # puts this back afterwards; unknown content (paused, excluded, a password) is
+        # never restored.
+        self.current: int | None = None
+        self._skip: dict[str, float] = {}  # text -> monotonic deadline
         helper.subscribe_clipboard(self._on_changed)
 
+    def skip_text(self, text: str) -> None:
+        """Don't record this text if it is copied in the next few seconds (a snippet
+        being pasted)."""
+        self._skip[text] = time.monotonic() + SKIP_SECONDS
+
     def _on_changed(self, mimetypes: list[str], wm_class: str, app_id: str) -> None:
+        self.current = None
         config = self._config()
         log.debug("clipboard changed: %s from %s / %s", mimetypes, wm_class, app_id)
         source = app_id.removesuffix(".desktop") or wm_class
@@ -92,8 +105,12 @@ class ClipboardRecorder:
             log.debug("clipboard %s came back empty", mime)
             return
         if kind == "text":
-            clip = self._store.add_text(data.decode("utf-8", errors="replace"), source)
+            text = data.decode("utf-8", errors="replace")
+            if self._skip.pop(text, 0) > time.monotonic():
+                return
+            clip = self._store.add_text(text, source)
             if clip is not None:
+                self.current = clip.id
                 self._after_add(config)
             return
         if len(data) > config.max_image_mb * 1024 * 1024:
@@ -114,7 +131,7 @@ class ClipboardRecorder:
 
     def _store_image(self, data, mime, source, thumbs, config) -> bool:
         width, height, icon, preview = thumbs
-        self._store.add_image(data, mime, source, width, height, icon, preview)
+        self.current = self._store.add_image(data, mime, source, width, height, icon, preview).id
         self._after_add(config)
         return GLib.SOURCE_REMOVE
 

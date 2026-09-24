@@ -1,4 +1,5 @@
-"""The Launcher Settings window: General, Shortcuts, Apps, Quicklinks and Files pages.
+"""The Launcher Settings window: General, Shortcuts, Apps, Quicklinks, Snippets,
+Clipboard and Files pages.
 
 All changes go through ConfigWriter, which validates the whole config before writing,
 so nothing done here can leave config.toml broken. The running launcher picks the
@@ -25,12 +26,14 @@ from ..clipboard_store import read_counts  # noqa: E402
 from ..config import Config, ConfigError  # noqa: E402
 from ..config_writer import ConfigWriter  # noqa: E402
 from ..favicons import domain_of  # noqa: E402
+from ..importers import espanso_base, import_espanso, read_espanso  # noqa: E402
 from ..providers.apps import AppEntry, load_apps  # noqa: E402
 from .dialogs import (  # noqa: E402
     AppDialog,
     AppPickerDialog,
     HotkeyRow,
     QuicklinkDialog,
+    SnippetDialog,
     accel_label,
     action_row,
     app_icon,
@@ -46,12 +49,12 @@ RELOAD_DELAY_MS = 300
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
         super().__init__(application=app, title="Launcher Settings")
-        self.set_default_size(860, 720)
+        self.set_default_size(1000, 720)
         self.writer = ConfigWriter(paths.config_file())
         self.config = Config()
         self._apps: list[AppEntry] | None = None
         self._system: tuple[float, dict[str, str]] | None = None
-        self._last_write_mtime = 0.0
+        self._written: dict[str, float] = {}  # file name -> mtime of our last write
         self._reload_source = 0
 
         self._banner = Adw.Banner(button_label="Open Config File")
@@ -72,6 +75,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ShortcutsPage(self),
             AppsPage(self),
             QuicklinksPage(self),
+            SnippetsPage(self),
             ClipboardPage(self),
             FilesPage(self),
         ]
@@ -107,9 +111,13 @@ class SettingsWindow(Adw.ApplicationWindow):
             return str(e)
         except OSError as e:
             return f"Could not write the config file: {e}"
-        self._last_write_mtime = _mtime(self.writer.path)
+        self._remember_writes()
         self._refresh_pages()
         return None
+
+    def _remember_writes(self) -> None:
+        for path in (self.writer.path, self.writer.snippets_path):
+            self._written[path.name] = _mtime(path)
 
     def save_or_toast(self, change: Callable[[ConfigWriter], Config]) -> None:
         if error := self.save(change):
@@ -127,7 +135,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.toast(f"Could not open the config file: {e}")
 
     def open_item(self, item: str) -> None:
-        """Jump to an app or quicklink (from Ctrl+E in the launcher)."""
+        """Jump to an app, quicklink or snippet (from Ctrl+E in the launcher)."""
         kind, _, key = item.partition(":")
 
         def show() -> bool:
@@ -138,6 +146,10 @@ class SettingsWindow(Adw.ApplicationWindow):
                 self._stack.set_visible_child_name("quicklinks")
                 exists = any(q.name.casefold() == key.casefold() for q in self.config.quicklinks)
                 QuicklinkDialog(self, key if exists else None).present()
+            elif kind == "snippet":
+                self._stack.set_visible_child_name("snippets")
+                exists = any(s.name.casefold() == key.casefold() for s in self.config.snippets)
+                SnippetDialog(self, key if exists else None, new_name=key).present()
             return GLib.SOURCE_REMOVE
 
         GLib.idle_add(show)  # after the window is mapped, so the dialog has a parent
@@ -156,6 +168,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         self._banner.set_revealed(False)
         self._stack.set_sensitive(True)
+        self._remember_writes()
         self._refresh_pages()
 
     def _refresh_pages(self) -> None:
@@ -163,8 +176,10 @@ class SettingsWindow(Adw.ApplicationWindow):
             page.refresh(self.config)
 
     def _on_config_dir_changed(self, _monitor, file, other, _event) -> None:
-        name = self.writer.path.name
-        if file.get_basename() != name and (other is None or other.get_basename() != name):
+        names = {self.writer.path.name, self.writer.snippets_path.name}
+        if file.get_basename() not in names and (
+            other is None or other.get_basename() not in names
+        ):
             return
         if self._reload_source:
             GLib.source_remove(self._reload_source)
@@ -172,8 +187,9 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def _reload_if_external(self) -> bool:
         self._reload_source = 0
-        if _mtime(self.writer.path) != self._last_write_mtime:
-            log.info("config file changed outside the settings window; reloading")
+        paths_ = (self.writer.path, self.writer.snippets_path)
+        if any(_mtime(p) != self._written.get(p.name) for p in paths_):
+            log.info("config files changed outside the settings window; reloading")
             self._load()
         return GLib.SOURCE_REMOVE
 
@@ -291,9 +307,8 @@ class ShortcutsPage(_Page):
         "files": ("File Search", "Search the folders set on the Files page"),
         "clipboard": ("Clipboard History", "Paste something you copied earlier"),
         "clipboard_pause": ("Pause Clipboard Recording", "Toggle; nothing copied is saved"),
-        "snippets": ("Snippets", "Coming with snippets"),
+        "snippets": ("Snippets", "Search your snippets and paste one"),
     }
-    _AVAILABLE = {"launcher", "files", "clipboard", "clipboard_pause"}
 
     def __init__(self, window: SettingsWindow) -> None:
         super().__init__(window, "Shortcuts", "preferences-desktop-keyboard-shortcuts-symbolic")
@@ -315,13 +330,12 @@ class ShortcutsPage(_Page):
                 ),
                 subtitle=subtitle,
             )
-            row.set_sensitive(mode in self._AVAILABLE)
             modes.add(row)
 
         items = Adw.PreferencesGroup(
-            title="App and Quicklink Hotkeys",
-            description="Set these on the Apps and Quicklinks pages, or with Ctrl+E in the "
-            "launcher.",
+            title="App, Quicklink and Snippet Hotkeys",
+            description="Set these on the Apps, Quicklinks and Snippets pages, or with Ctrl+E "
+            "in the launcher.",
         )
         count = 0
         for app_id, app in config.apps.items():
@@ -335,8 +349,12 @@ class ShortcutsPage(_Page):
             if link.hotkey:
                 items.add(self._item_row(link.name, link.hotkey, f"quicklink:{link.name}"))
                 count += 1
+        for snippet in config.snippets:
+            if snippet.hotkey:
+                items.add(self._item_row(snippet.name, snippet.hotkey, f"snippet:{snippet.name}"))
+                count += 1
         if not count:
-            items.add(action_row(title="No app or quicklink hotkeys yet", sensitive=False))
+            items.add(action_row(title="No item hotkeys yet", sensitive=False))
         self._replace_groups([modes, items])
 
     def _item_row(self, title: str, hotkey: str, item: str) -> Adw.ActionRow:
@@ -441,6 +459,95 @@ class QuicklinksPage(_Page):
         add.connect("activated", lambda _r: QuicklinkDialog(self.window, None).present())
         group.add(add)
         self._replace_groups([group])
+
+
+class SnippetsPage(_Page):
+    key = "snippets"
+
+    def __init__(self, window: SettingsWindow) -> None:
+        super().__init__(window, "Snippets", "insert-text-symbolic")
+
+    def refresh(self, config: Config) -> None:
+        group = Adw.PreferencesGroup(
+            title="Snippets",
+            description="Paste them from the launcher (Snippets shortcut, or search by name). "
+            "A trigger also expands as you type, anywhere.",
+        )
+        for snippet in config.snippets:
+            first = next((ln.strip() for ln in snippet.body.splitlines() if ln.strip()), "")
+            parts = [p for p in (snippet.trigger, snippet.alias and f"“{snippet.alias}”") if p]
+            if snippet.hotkey:
+                parts.append(accel_label(snippet.hotkey))
+            parts.append(first)
+            row = action_row(title=snippet.name, subtitle=" · ".join(parts), activatable=True)
+            row.set_subtitle_lines(1)
+            row.add_prefix(Gtk.Image(icon_name="insert-text-symbolic"))
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect(
+                "activated",
+                lambda _r, name=snippet.name: SnippetDialog(self.window, name).present(),
+            )
+            group.add(row)
+        add = Adw.ButtonRow(title="Add Snippet…", start_icon_name="list-add-symbolic")
+        add.connect("activated", lambda _r: SnippetDialog(self.window, None).present())
+        group.add(add)
+        self._replace_groups([group, self._espanso_group(config)])
+
+    def _espanso_group(self, config: Config) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup(
+            title="Typed Expansion",
+            description="Triggers are expanded by espanso, which the launcher keeps up to "
+            "date. espanso restarts when snippets change, so a window may lose focus for a "
+            "moment after you save.",
+        )
+        match_dir = paths.espanso_match_dir()
+        if not match_dir.is_dir():
+            group.add(
+                action_row(
+                    title="espanso isn't set up",
+                    subtitle="Install espanso to expand triggers as you type; pasting from "
+                    "the launcher works without it.",
+                )
+            )
+            return group
+        with_trigger = sum(1 for s in config.snippets if s.trigger)
+        status = action_row(
+            title="Snippets given to espanso",
+            subtitle=f"{with_trigger} with a trigger, in "
+            + str(match_dir / "launcher.yml").replace(str(Path.home()), "~"),
+        )
+        status.add_css_class("property")
+        group.add(status)
+        try:
+            importable = read_espanso(espanso_base(), config.snippets).snippets
+        except (OSError, ValueError, ImportError):
+            importable = []  # no base.yml, or not one we understand
+        except Exception:
+            log.exception("reading espanso's base.yml failed")
+            importable = []
+        if importable:
+            count = len(importable)
+            row = action_row(
+                title=f"Move {count} snippet{'s' if count != 1 else ''} from espanso",
+                subtitle="From espanso's base.yml, so you can edit them here. A backup is "
+                "kept as base.yml.bak; matches that need espanso features stay there.",
+            )
+            button = Gtk.Button(label="Move Here", valign=Gtk.Align.CENTER)
+            button.add_css_class("suggested-action")
+            button.connect("clicked", lambda _b: self._import())
+            row.add_suffix(button)
+            group.add(row)
+        return group
+
+    def _import(self) -> None:
+        moved: list = []
+        error = self.window.save(
+            lambda w: (moved.extend(import_espanso(w, espanso_base())), w.load())[1]
+        )
+        if error:
+            self.window.toast(f"Not imported: {error}")
+        else:
+            self.window.toast(f"Moved {len(moved)} snippets from espanso")
 
 
 def _link_icon(url: str, icon: str) -> Gtk.Image:

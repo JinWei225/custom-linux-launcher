@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import time
+from collections.abc import Callable
 from importlib import resources
 
 import gi
@@ -21,7 +22,15 @@ from gi.repository import Adw, Gdk, Gio, GLib, GLibUnix, Gtk  # noqa: E402
 from . import APP_ID, launching, paths, shortcuts  # noqa: E402
 from .clipboard_recorder import ClipboardRecorder  # noqa: E402
 from .clipboard_store import ClipboardStore, app_matches  # noqa: E402
-from .config import Config, ConfigError, ensure_config, hotkey_owners, load_config  # noqa: E402
+from .config import (  # noqa: E402
+    Config,
+    ConfigError,
+    Snippet,
+    ensure_config,
+    hotkey_owners,
+    load_config,
+    snippets_file,
+)
 from .engine import MODES, Engine  # noqa: E402
 from .favicons import FaviconCache  # noqa: E402
 from .file_watcher import FileWatcher  # noqa: E402
@@ -37,12 +46,19 @@ from .providers.quicklinks import (  # noqa: E402
     WebSearchProvider,
     fill_url,  # noqa: E402
 )
+from .providers.snippets import SnippetsProvider  # noqa: E402
+from .snippets import expand, sync_espanso, uses_clipboard  # noqa: E402
 from .store import UsageStore  # noqa: E402
 from .window import LauncherWindow  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 CONFIG_RELOAD_DELAY_MS = 200
+# After pasting a snippet: when to move the cursor to {cursor}, and when to put back
+# what was on the clipboard before (the app must have read the snippet by then).
+CURSOR_DELAY_MS = 150
+RESTORE_CLIPBOARD_DELAY_MS = 500
+TEXT_MIME = "text/plain;charset=utf-8"
 
 
 class LauncherApp(Adw.Application):
@@ -105,6 +121,8 @@ class LauncherApp(Adw.Application):
                 "websearch": WebSearchProvider(self, icons=self._website_icon),
                 "files": FilesProvider(self, file_index),
                 "clipboard": ClipboardProvider(self, self._clips, app_name=_app_name),
+                "snippets": SnippetsProvider(self, browse=True),
+                "snippet-search": SnippetsProvider(self, browse=False),
             },
             usage=self._usage,
         )
@@ -117,7 +135,7 @@ class LauncherApp(Adw.Application):
         apps.query("")  # load the app list now rather than on the first keystroke
 
         self.window = LauncherWindow(self, self._engine, self.config)
-        self.window.set_problems(problems + self._sync_shortcuts())
+        self.window.set_problems(problems + self._sync_shortcuts() + self._sync_espanso())
         self.window.realize()  # pay the first-show setup cost at startup, not on first use
         self._add_actions()
         self._watch_config()
@@ -203,7 +221,7 @@ class LauncherApp(Adw.Application):
         self._prefetch_icons()
         self._file_watcher.configure(IndexSettings.from_config(config.files))
         self.window.apply_config(config)
-        self.window.set_problems(warnings + self._sync_shortcuts())
+        self.window.set_problems(warnings + self._sync_shortcuts() + self._sync_espanso())
         log.info("config reloaded")
 
     def open_config(self) -> None:
@@ -270,6 +288,9 @@ class LauncherApp(Adw.Application):
         try:
             if kind == "app":
                 self.launch_app(key)
+            elif kind == "snippet":
+                self._paste_target = self._foreign_focused_window()
+                self.paste_snippet(key)
             elif kind == "quicklink":
                 link = next(
                     (q for q in self.config.quicklinks if q.name.casefold() == key.casefold()),
@@ -289,6 +310,15 @@ class LauncherApp(Adw.Application):
             self.notify_error("Launcher hotkey failed", str(e))
             return
         self._engine.record(Result(id=item_id, title=key))
+
+    def _sync_espanso(self) -> list[str]:
+        """Give espanso the snippets that have a trigger; returns problems for the banner."""
+        try:
+            sync_espanso(self.config.snippets, paths.espanso_match_dir())
+        except OSError as e:
+            log.exception("writing espanso's match file failed")
+            return [f"could not update espanso's snippets: {e}"]
+        return []
 
     def _sync_shortcuts(self) -> list[str]:
         """Register the config's hotkeys with GNOME; returns problems for the banner."""
@@ -310,8 +340,7 @@ class LauncherApp(Adw.Application):
     def _show(self, mode: str, toggle: bool) -> None:
         if not (toggle and self.window.get_visible() and self.window.mode == mode):
             # Remember the window we are opened from: clipboard entries paste back into it.
-            target = self._helper.focused_window()
-            if target is not None and not app_matches((APP_ID,), target.wm_class, target.app_id):
+            if target := self._foreign_focused_window():
                 self._paste_target = target
                 log.debug("paste target: %s", target)
         if toggle:
@@ -319,10 +348,24 @@ class LauncherApp(Adw.Application):
         else:
             self.window.show_mode(mode)
 
+    def _foreign_focused_window(self) -> Target | None:
+        """The focused window, unless it is the launcher's own."""
+        target = self._helper.focused_window()
+        if target is None or app_matches((APP_ID,), target.wm_class, target.app_id):
+            return None
+        return target
+
     def mode_status(self, mode: str) -> str | None:
         """A line shown under the search box in this mode, if something needs attention."""
-        if mode != "clipboard" or self._helper is None:
+        if mode not in ("clipboard", "snippets") or self._helper is None:
             return None
+        if mode == "snippets":
+            if self._helper.available:
+                return None
+            return (
+                "Pasting needs the Launcher Helper GNOME extension; until then Enter copies "
+                "the snippet and you press Ctrl+V."
+            )
         if not self._helper.available:
             return (
                 "Clipboard history needs the Launcher Helper GNOME extension: run "
@@ -350,6 +393,10 @@ class LauncherApp(Adw.Application):
 
     def paste_clip(self, clip_id: int) -> None:
         self._put_on_clipboard(clip_id)
+        self._paste(self._on_pasted)
+
+    def _paste(self, done: Callable[[bool], None]) -> None:
+        """Paste what is on the clipboard into the window the launcher was opened from."""
         target = self._paste_target
         if target is None or not self._helper.available:
             self._notify("Copied to the clipboard", "Press Ctrl+V to paste it.")
@@ -362,17 +409,86 @@ class LauncherApp(Adw.Application):
         def paste() -> bool:
             # By now the launcher window has hidden; the extension waits for focus to
             # return to the target window before sending the keys.
-            self._helper.paste(target, with_shift, self._on_pasted)
+            self._helper.paste(target, with_shift, done)
             return GLib.SOURCE_REMOVE
 
         GLib.timeout_add(50, paste)
 
-    def _on_pasted(self, pasted: bool) -> None:
+    def _on_pasted(self, pasted: bool) -> bool:
         if not pasted:
             self._notify(
                 "Copied to the clipboard",
                 "The window it was meant for is gone; press Ctrl+V where you want it.",
             )
+        return pasted
+
+    # --- snippets ----------------------------------------------------------------------
+
+    def _snippet(self, name: str) -> Snippet:
+        snippet = next(
+            (s for s in self.config.snippets if s.name.casefold() == name.casefold()), None
+        )
+        if snippet is None:
+            raise LookupError(f"there is no snippet named '{name}' any more")
+        return snippet
+
+    def _expand_snippet(self, name: str, then: Callable[[str, int], None]) -> None:
+        """Fill in the snippet's placeholders (reading the clipboard only if needed)."""
+        body = self._snippet(name).body
+        if not uses_clipboard(body) or not self._helper.available:
+            then(*expand(body))
+            return
+        self._helper.get_clipboard(
+            TEXT_MIME,
+            lambda data: then(*expand(body, clipboard=(data or b"").decode("utf-8", "replace"))),
+        )
+
+    def paste_snippet(self, name: str) -> None:
+        if not self._helper.available or self._paste_target is None:
+            self.copy_snippet(name)
+            self._notify("Snippet copied to the clipboard", "Press Ctrl+V to paste it.")
+            return
+        # What the clipboard holds now, to put back once the snippet is pasted. Only a
+        # recorded history entry can be restored (never a password, say).
+        restore = self._recorder.current if self._recorder is not None else None
+
+        def paste(text: str, after_cursor: int) -> None:
+            if self._recorder is not None:
+                self._recorder.skip_text(text)  # a snippet is not a copy: keep it out
+            if not self._helper.set_clipboard(TEXT_MIME, text.encode()):
+                self.notify_error("Snippet not pasted", "The clipboard could not be set.")
+                return
+            self._paste(lambda ok: self._after_snippet_paste(ok, after_cursor, restore))
+
+        self._expand_snippet(name, paste)
+
+    def _after_snippet_paste(self, pasted: bool, after_cursor: int, restore: int | None) -> None:
+        if not self._on_pasted(pasted):
+            return  # the snippet stays on the clipboard for Ctrl+V
+        if after_cursor and self._helper.version >= 2:
+            GLib.timeout_add(
+                CURSOR_DELAY_MS,
+                lambda: (self._helper.cursor_left(after_cursor), GLib.SOURCE_REMOVE)[1],
+            )
+        if restore is not None:
+
+            def put_back() -> bool:
+                try:
+                    self._put_on_clipboard(restore)
+                except LookupError:
+                    pass  # deleted meanwhile
+                return GLib.SOURCE_REMOVE
+
+            GLib.timeout_add(RESTORE_CLIPBOARD_DELAY_MS, put_back)
+
+    def copy_snippet(self, name: str) -> None:
+        def copy(text: str, _after_cursor: int) -> None:
+            if not (
+                self._helper.available and self._helper.set_clipboard(TEXT_MIME, text.encode())
+            ):
+                self.copy_text(text)
+
+        self._expand_snippet(name, copy)
 
     def copy_clip(self, clip_id: int) -> None:
         self._put_on_clipboard(clip_id)
@@ -431,8 +547,10 @@ class LauncherApp(Adw.Application):
         self._config_monitor.connect("changed", self._on_config_dir_changed)
 
     def _on_config_dir_changed(self, _monitor, file, other, _event) -> None:
-        name = paths.config_file().name
-        if file.get_basename() != name and (other is None or other.get_basename() != name):
+        names = {paths.config_file().name, snippets_file(paths.config_file()).name}
+        if file.get_basename() not in names and (
+            other is None or other.get_basename() not in names
+        ):
             return
         if self._reload_source:
             GLib.source_remove(self._reload_source)

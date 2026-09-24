@@ -2,7 +2,7 @@
 
 Runs the real launcher daemon (dev venv) with the Launcher Helper extension, a GTK test
 app that copies things like a normal app, and checks recording, previews, pasting back
-into the app, pausing and terminal-style paste. Run through:
+into the app, pausing, terminal-style paste and snippets. Run through:
 
     tools/nested-shell.sh .venv/bin/python tools/nested_e2e_test.py [snapshot dir]
 """
@@ -27,6 +27,8 @@ LAUNCHER = str(ROOT / ".venv/bin/launcher")
 SNAPSHOTS = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 DATA = Path(os.environ["XDG_DATA_HOME"]) / "launcher"
 CONFIG = Path(os.environ["XDG_CONFIG_HOME"]) / "launcher" / "config.toml"
+SNIPPETS = CONFIG.with_name("snippets.toml")
+ESPANSO = Path(os.environ["XDG_CONFIG_HOME"]) / "espanso" / "match" / "launcher.yml"
 TEST_APP_ID = "io.github.jinwei.LauncherNestedTest"
 
 results: list[tuple[str, bool]] = []
@@ -96,9 +98,18 @@ class TestApp:
     def texts(self) -> list[str]:
         return [e["text"] for e in self.events if e["event"] == "text"]
 
+    def last(self, event: str) -> dict | None:
+        return next((e for e in reversed(self.events) if e["event"] == event), None)
+
 
 def main() -> int:
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    ESPANSO.parent.mkdir(parents=True, exist_ok=True)
+    SNIPPETS.write_text(
+        '[[snippet]]\nname = "Greeting"\ntrigger = ";hi"\n'
+        'body = "Hello {clipboard}!{cursor} bye"\n\n'
+        '[[snippet]]\nname = "Plain"\nbody = """\nplain snippet"""\n'
+    )
     daemon_log = open(Path(os.environ["XDG_CACHE_HOME"]) / "daemon.log", "w")
     daemon = subprocess.Popen(
         [LAUNCHER, "--daemon", "--debug"], stdout=daemon_log, stderr=daemon_log
@@ -116,7 +127,11 @@ def main() -> int:
 def run(daemon_log: str) -> int:
     time.sleep(2.5)
     log_text = Path(daemon_log).read_text()
-    check("daemon sees the helper extension", "Launcher Helper extension v1 is active" in log_text)
+    check("daemon sees the helper extension", "Launcher Helper extension v2 is active" in log_text)
+    check(
+        "espanso gets the snippets with a trigger",
+        ESPANSO.exists() and ";hi" in ESPANSO.read_text() and "Plain" not in ESPANSO.read_text(),
+    )
 
     app = TestApp()
     app.read(4)
@@ -153,6 +168,45 @@ def run(daemon_log: str) -> int:
         "first entry from the app" in app.texts(),
         repr(app.texts()[-3:]),
     )
+
+    # 2b. Snippets: placeholders, cursor, not recorded, clipboard put back afterwards.
+    app.send("clear")
+    app.read(0.3)
+    launcher("--show", "--mode", "snippets")
+    time.sleep(0.8)
+    action("debug-set-query", "greet")
+    time.sleep(0.4)
+    if SNAPSHOTS:
+        action("debug-snapshot", str(SNAPSHOTS / "snippets.png"))
+        time.sleep(0.2)
+    app.events.clear()
+    action("debug-run-selected")
+    app.read(2.5)
+    expected = "Hello first entry from the app! bye"
+    check("snippet pasted with {clipboard}", expected in app.texts(), repr(app.texts()[-3:]))
+    cursor = app.last("cursor")
+    check(
+        "{cursor} puts the cursor back",
+        cursor is not None and cursor["position"] == len(expected) - len(" bye"),
+        repr(cursor),
+    )
+    check("pasted snippets are not recorded", all("Hello" not in c["text"] for c in clips()))
+    app.send("read-clipboard")
+    app.read(0.5)
+    got = app.last("clipboard")
+    check(
+        "clipboard is put back after a snippet",
+        got is not None and got.get("text") == "first entry from the app",
+        repr(got),
+    )
+    app.send("clear")
+    app.read(0.3)
+    launcher("--run", "snippet:plain")  # what a snippet hotkey runs
+    app.read(2.0)
+    check("--run snippet:<name> pastes it", "plain snippet" in app.texts(), repr(app.texts()[-2:]))
+    SNIPPETS.write_text(SNIPPETS.read_text().replace(";hi", ";hey"))
+    time.sleep(1.0)
+    check("editing snippets updates espanso", ";hey" in ESPANSO.read_text())
 
     # 3. An image is recorded with thumbnails.
     png = Path(os.environ["XDG_CACHE_HOME"]) / "picture.png"

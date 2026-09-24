@@ -1,8 +1,8 @@
 {
   "uuid": "launcher-helper@jinwei.github.io",
   "name": "Launcher Helper",
-  "description": "Clipboard access and paste-into-window for the personal launcher (github.com/JinWei225/custom-linux-launcher). Only the launcher process may use it.",
+  "description": "Clipboard access, paste-into-window and snippet cursor placement for the personal launcher (github.com/JinWei225/custom-linux-launcher). Only the launcher process may use it.",
   "shell-version": ["50"],
   "url": "https://github.com/JinWei225/custom-linux-launcher",
-  "version": 1
+  "version": 2
 }
