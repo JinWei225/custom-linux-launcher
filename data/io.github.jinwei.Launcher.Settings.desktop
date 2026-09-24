@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Launcher Settings
+Comment=Shortcuts, app aliases, quicklinks and file search for the launcher
+Exec=launcher --settings
+Icon=preferences-system
+Terminal=false
+StartupNotify=true
+Categories=Settings;Utility;
+Keywords=launcher;hotkey;shortcut;alias;quicklink;

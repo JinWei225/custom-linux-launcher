@@ -77,9 +77,9 @@ Why the design is split this way:
 
 **Recommendation: A.**
 
-### 🔶 D3 — Snippet expansion while typing (needed for M5) — **leaning A, check again in M3**
+### 🔶 D3 — Snippet expansion while typing (needed for M5) — **leaning A, check again in M5**
 
-**Status 2026-09-24:** typing in all three input languages works with espanso plus the gsettings fix. Keep option A for now. During M3 (global shortcuts), check whether pressing the launcher's shortcuts also makes espanso restart or flash its window. If espanso still causes trouble there, switch to option B.
+**Status 2026-09-24:** typing in all three input languages works with espanso plus the gsettings fix. Keep option A for now. During M5, check whether setting up and editing text snippets (espanso reloading its match files) makes it flash its window. If espanso still causes trouble there, switch to option B. (Hotkeys were checked in M3 and are fine.)
 | Option | Pros | Cons |
 |---|---|---|
 | **A. espanso does the expansion; launcherd manages the snippets** | Already installed, proven on Wayland; snippet storage is our own | Relies on espanso's reliability; it needs to run with an `input` group or uinput capability |
@@ -103,7 +103,7 @@ Sub-decision if A — where the snippets are stored:
 
 **Recommendation: A.** The extension is needed for clipboard watching anyway. Fallback when it isn't running: copy the item to the clipboard only, and show "copied — press Ctrl+V".
 
-### 🔶 D5 — File search backend (needed for M2)
+### ✅ D5 — File search backend — **decided: A (own in-memory index + inotify)**
 | Option | Pros | Cons |
 |---|---|---|
 | **A. Own index in memory + `Gio.FileMonitor`/inotify** | Only the folders you choose; instant; predictable; no dependencies | We maintain it (small job) |
@@ -112,9 +112,9 @@ Sub-decision if A — where the snippets are stored:
 
 **Recommendation: A.** Build a list of paths at startup, keep it current with inotify, and apply the same fuzzy matching used everywhere else. Configure include folders, exclude patterns (`node_modules`, `.git`, `*.part`) and a maximum depth.
 
-### ✅ D6 — Configuration style — **decided: A (TOML files, hot-reloaded)**
-- **A. TOML files only, hot-reloaded when they change** *(chosen: easy to back up and track in git)*
-- B. TOML files plus a libadwaita preferences window (can be added in M6)
+### ✅ D6 — Configuration style — **decided: B (TOML file + Launcher Settings window)**, upgraded from A on 2026-09-24
+- A. TOML files only, hot-reloaded when they change
+- **B. TOML files plus a libadwaita preferences window** *(chosen: the file stays the single source of truth and can still be edited by hand)*
 - C. Preferences window only (settings stored in GSettings)
 
 ### 🔶 D7 — Clipboard history rules (needed for M4)
@@ -175,6 +175,22 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - **Interim shortcut (until M3):** the existing GNOME custom shortcut `custom0` (Ctrl+Space, previously `ulauncher-toggle`) now runs `~/.local/bin/launcher`. M3's `install-shortcuts` takes over from it.
 - **Launching survives launcher restarts:** each launched app (and the browser opened for a URL) is spawned by the launcher, then moved into its own systemd scope `app-launcher-<id>-<pid>.scope`, as GNOME Shell does. Otherwise `systemctl --user restart launcher` would kill every app opened through it. The app's output goes to /dev/null, not the launcher's journal. Actions run *before* the window hides, because GNOME only honours the xdg-activation token (which gives the new app focus) from the focused window.
 
+### 4.1b File search (M2, as built)
+- `[files]` sets `folders` (default `~/Downloads`, `~/Documents`), `exclude` (glob patterns matched against names anywhere below, e.g. `.git`, `node_modules`, `*.part`), `max_depth` (default 8 levels) and `show_hidden`.
+- **Index:** at startup (and on config change) a background thread scans the folders without following symlinks. The result is then owned by the main thread. One `Gio.FileMonitor` per folder reports changes, and any event re-reads just that folder after a 300 ms debounce, so new downloads show up within about half a second. Safety limits are 200,000 entries and 20,000 watched folders; beyond those it logs a warning instead of eating memory or inotify watches.
+- **Search:** fuzzy match on the file name (or on the path below the folder if the query contains `/`), boosted by how recently the file was modified (half-life 7 days). A regex over all names joined into one string pre-filters in C, so only real candidates are scored in Python. Measured on 100k synthetic files: about 50 ms per query, about 120 ms for a single letter. An empty query lists the newest files.
+- **Actions:** Enter opens with the default app for the file's content type, in its own systemd scope like app launches. Alt+Enter shows the file selected in Files (`org.freedesktop.FileManager1.ShowItems`, with an activation token). Files only appear in `files` mode (Super+Shift+F), not the main launcher.
+
+### 4.1c Launcher Settings and hotkeys (built 2026-09-24, pulled forward from M3/M6)
+- **Launcher Settings** (`launcher --settings`, "Launcher Settings" in the app grid or the launcher's results) is a separate libadwaita process with pages General, Shortcuts, Apps, Quicklinks and Files. A bug in it can't crash the launcher, and a second invocation goes to the open window.
+- **Ctrl+E** on an app, quicklink or fallback search in the launcher opens Settings at that item's alias/hotkey dialog.
+- **Safe writes** (`config_writer.py`): every change re-reads `config.toml`, edits it with tomlkit (comments and layout kept), validates the whole result with the launcher's own parser, and only then replaces the file in one step. If a change would make the config invalid, it is refused and nothing is written. If the file was hand-edited into an invalid state, Settings pauses editing and shows why, instead of overwriting it.
+- **Config format:** `[shortcuts]` (launcher, files, clipboard, snippets), `[apps."<desktop id>"]` with `alias`/`hotkey` (replaces `[aliases]`), and `hotkey` on `[[quicklink]]`. Hotkeys must use Super, Ctrl or Alt (or be F1–F24), and must be unique across the config; duplicate aliases and quicklink names are errors.
+- **Hotkeys = GNOME custom keybindings** (`shortcuts.py`). On startup and every config reload, the launcher makes the `launcher-*` entries under `org.gnome.settings-daemon.plugins.media-keys` match the config, and never touches any other entry. A hand-made custom shortcut that runs the launcher with a key the config now owns is replaced (this is how the interim Ctrl+Space `custom0` became `launcher-main`). A key already used elsewhere is skipped and shown in the banner.
+- **Clash checks** read about 200 shortcuts: GNOME's wm/shell/mutter/media-keys schemas, every *enabled* extension's schema (found through `metadata.json`, or its code when the schema isn't declared, as with Ubuntu Dock), and other custom shortcuts. The recorder dialog rejects clashes as you press them.
+- **Item hotkeys** run `launcher --run app:<id>` / `--run quicklink:<name>`. A hotkey on a search quicklink opens the launcher with its alias typed (`g `).
+- **Known limit:** keys GNOME has already grabbed never reach the recorder, so they can't be recorded. They would be clashes anyway, apart from re-recording the launcher's own current key.
+
 ### 4.2 Modes
 `launcher --mode {all|apps|files|clipboard|snippets}` opens the window with only those providers, and a matching placeholder text and layout. For example, clipboard mode shows a list on the left and a large text or image preview on the right.
 
@@ -226,7 +242,13 @@ linux-launcher/
 │   ├── store.py                  # SQLite (frecency, clipboard, snippets metadata)
 │   ├── launching.py              # spawn apps/URIs into their own systemd scopes
 │   ├── importers.py              # Ulauncher shortcuts.json → [[quicklink]]
-│   ├── shortcuts.py              # gsettings custom-keybinding installer
+│   ├── favicons.py               # website icons, cached, fetched in background
+│   ├── files_index.py            # file index: scan, rescan_dir, search (pure Python)
+│   ├── file_watcher.py           # scan thread + Gio.FileMonitor per folder
+│   ├── shortcuts.py              # sync launcher-* GNOME custom keybindings, clash detection
+│   ├── accel.py                  # accelerator parsing/normalizing (pure)
+│   ├── config_writer.py          # validated, comment-preserving config edits (tomlkit)
+│   ├── settings/                 # Launcher Settings app (window, dialogs, debug renderer)
 │   └── providers/
 │       ├── base.py               # Result, Provider and Host protocols
 │       ├── commands.py           # built-in: reload config, open config, quit
@@ -254,8 +276,8 @@ Each milestone ends with something you can use every day. Use the launcher yours
 |---|---|---|---|
 | **M0** ✅ | Skeleton: Gio.Application single instance, window that hides and shows, config loading, systemd unit, `make dev` | ✅ all decided | `launcher` shows or hides the window within 100 ms from the command line. **Done 2026-09-24:** about 60 ms end to end (command + window focused) |
 | **M1** ✅ | Apps, quicklinks, web search, aliases, frecency ranking, Ulauncher import | — | Ulauncher can be uninstalled. **Built 2026-09-24:** waiting on your daily-use check |
-| **M2** | File search over configured folders, open and reveal-in-folder actions | D5 | Finding a new download takes under 1 s after it lands |
-| **M3** | `launcher install-shortcuts` with clash check; per-mode shortcuts | ✅ D8 | All mode shortcuts work from any app |
+| **M2** ✅ | File search over configured folders, open and reveal-in-folder actions | ✅ D5 = A | Finding a new download takes under 1 s after it lands. **Built 2026-09-24:** new files show up in about 0.5 s; Super+Shift+F added early |
+| **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
 | **M4** | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app |
 | **M5** | Snippets: launcher search and paste; espanso YAML generation; placeholders | D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher |
 | **M6** | Polish: preferences window (if D6 = B), themes, per-item hotkeys, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
@@ -286,10 +308,10 @@ Each milestone ends with something you can use every day. Use the launcher yours
 |---|---|---|---|---|
 | D1 | Language/toolkit | Python + PyGObject (GTK4/libadwaita) | 2026-09-24 | |
 | D2 | UI host | GTK4 window + thin Shell extension | 2026-09-24 | |
-| D3 | Typed expansion | espanso (A), provisional | 2026-09-24 | IBus ruled out (pinyin/hangul in use). Check again in M3; option B if espanso still causes trouble |
+| D3 | Typed expansion | espanso (A), provisional | 2026-09-24 | IBus ruled out (pinyin/hangul in use). Check again in M5 when snippets are set up; option B if espanso still flashes |
 | D4 | Paste keystroke | | | |
-| D5 | File search backend | | | |
-| D6 | Config style | TOML files, hot-reloaded | 2026-09-24 | Preferences window may come in M6 |
+| D5 | File search backend | Own in-memory index + Gio.FileMonitor (A) | 2026-09-24 | |
+| D6 | Config style | TOML + Launcher Settings window (B) | 2026-09-24 | Every GUI edit is validated before it is written; comments preserved (tomlkit) |
 | D7 | Clipboard rules | | | |
-| D8 | Shortcuts | Super+Shift + Return / V / P / S / F | 2026-09-24 | Disable clipboard-history@alexsaveau.dev at M4 |
+| D8 | Shortcuts | Super+Shift + Return / V / P / S / F; main launcher kept on Ctrl+Space | 2026-09-24 | All editable in Launcher Settings with clash checks |
 | D9 | Autostart/packaging | systemd --user service + uv | 2026-09-24 | |

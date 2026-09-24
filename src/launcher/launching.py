@@ -50,6 +50,59 @@ def open_uri(uri: str, context: Gio.AppLaunchContext | None) -> None:
         Gio.AppInfo.launch_default_for_uri(uri, context)
 
 
+def open_file(path: str, context: Gio.AppLaunchContext | None) -> None:
+    """Open a file or folder with the default app for its type."""
+    gfile = Gio.File.new_for_path(path)
+    info = gfile.query_info(Gio.FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, Gio.FileQueryInfoFlags.NONE)
+    content_type = info.get_content_type() or "application/octet-stream"
+    handler = Gio.AppInfo.get_default_for_type(content_type, False)
+    if isinstance(handler, GioUnix.DesktopAppInfo):
+        _launch(handler, [gfile.get_uri()], context)
+    elif handler is not None:
+        handler.launch([gfile], context)
+    else:
+        raise LookupError(f"no application is set to open {content_type} files")
+
+
+def reveal_file(path: str, startup_id: str) -> None:
+    """Show the file selected in its folder (Files / any FileManager1 implementation)."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    bus.call(
+        "org.freedesktop.FileManager1",
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1",
+        "ShowItems",
+        GLib.Variant("(ass)", ([Gio.File.new_for_path(path).get_uri()], startup_id)),
+        None,
+        Gio.DBusCallFlags.NONE,
+        5000,
+        None,
+        _on_reveal_done,
+        path,
+    )
+
+
+def _on_reveal_done(bus: Gio.DBusConnection, result: Gio.AsyncResult, path: str) -> None:
+    try:
+        bus.call_finish(result)
+    except GLib.Error as e:
+        log.warning("cannot show %s in the file manager: %s", path, e.message)
+
+
+def spawn(argv: list[str], unit_id: str, activation_token: str | None) -> None:
+    """Start a helper process (e.g. Launcher Settings) outside launcher.service."""
+    env = dict(os.environ)
+    if activation_token:
+        env["XDG_ACTIVATION_TOKEN"] = activation_token
+        env["DESKTOP_STARTUP_ID"] = activation_token
+    pid, *_ = GLib.spawn_async(
+        argv,
+        envp=[f"{k}={v}" for k, v in env.items()],
+        flags=GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.DO_NOT_REAP_CHILD,
+    )
+    _adopt(unit_id, pid)
+
+
 def _launch(info: GioUnix.DesktopAppInfo, uris: list[str], context) -> None:
     app_id = info.get_id() or "unknown"
     log.info("launching %s %s", app_id, " ".join(uris))

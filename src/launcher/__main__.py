@@ -6,6 +6,8 @@ launcher --show / --hide    show or hide without toggling
 launcher --reload | --quit  control the running daemon
 launcher --daemon           start in the background (used by the systemd unit)
 launcher --import-ulauncher print Ulauncher shortcuts as [[quicklink]] TOML
+launcher --run app:ID       launch an app / quicklink (what hotkeys run)
+launcher --settings [--edit app:ID|quicklink:NAME]   open Launcher Settings
 """
 
 from __future__ import annotations
@@ -26,6 +28,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     group.add_argument("--reload", action="store_true", help="reload the config file")
     group.add_argument("--quit", action="store_true", help="stop the running launcher")
     group.add_argument("--daemon", action="store_true", help="start hidden in the background")
+    group.add_argument("--run", metavar="ITEM", help="run app:<desktop id> or quicklink:<name>")
+    group.add_argument("--settings", action="store_true", help="open Launcher Settings")
+    parser.add_argument("--edit", metavar="ITEM", help="with --settings: open this item")
+    parser.add_argument("--debug-snapshots", metavar="DIR", help=argparse.SUPPRESS)
     group.add_argument(
         "--import-ulauncher",
         action="store_true",
@@ -40,6 +46,8 @@ def requested_action(args: argparse.Namespace) -> tuple[str, str | None]:
     for name in ("hide", "reload", "quit"):
         if getattr(args, name):
             return name, None
+    if args.run:
+        return "run", args.run
     return ("show" if args.show else "toggle"), args.mode
 
 
@@ -55,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
 
         print(import_ulauncher(), end="")
         return 0
+
+    if args.settings:
+        from .settings.app import run_settings
+
+        return run_settings(args.edit, snapshots=args.debug_snapshots)
 
     action, param = requested_action(args)
 
@@ -73,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     # No daemon is running (or we are the daemon): become the primary instance.
     from .app import run_primary
 
-    initial = None if args.daemon else ("show", param)
+    # Nothing to toggle yet: a fresh instance shows itself (or runs the requested item).
+    initial = None if args.daemon else ("run" if action == "run" else "show", param)
     return run_primary(initial, debug=args.debug)
 
 

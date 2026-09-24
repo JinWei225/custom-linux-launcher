@@ -69,7 +69,10 @@ class AppsProvider:
         self._alias_targets: dict[str, str] = {}
 
     def configure(self, config: Config) -> None:
-        self._alias_targets = {k.casefold(): v for k, v in config.aliases.items()}
+        # alias -> desktop id (or, for hand-written entries, an app name)
+        self._alias_targets = {
+            app.alias.casefold(): app_id for app_id, app in config.apps.items() if app.alias
+        }
         self._resolve_aliases()
 
     def invalidate(self) -> None:

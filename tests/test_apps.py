@@ -1,4 +1,4 @@
-from launcher.config import Config
+from launcher.config import AppSettings, Config
 from launcher.providers.apps import AppEntry, AppsProvider
 from launcher.providers.base import ALIAS_SCORE
 
@@ -12,7 +12,8 @@ APPS = [
 
 def provider(host, apps=APPS, aliases=None):
     p = AppsProvider(host, loader=lambda: list(apps))
-    p.configure(Config(aliases=aliases or {}))
+    targets = {target: AppSettings(alias=alias) for alias, target in (aliases or {}).items()}
+    p.configure(Config(apps=targets))
     return p
 
 

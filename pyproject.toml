@@ -5,7 +5,7 @@ description = "Personal app, file, clipboard and snippet launcher for GNOME on W
 requires-python = ">=3.12"
 # PyGObject, GTK 4 and libadwaita come from the system (python3-gi, gir1.2-gtk-4.0,
 # gir1.2-adw-1); the venv is created with --system-site-packages to see them.
-dependencies = []
+dependencies = ["tomlkit>=0.13"]
 
 [project.scripts]
 launcher = "launcher.__main__:main"

@@ -258,6 +258,17 @@ class LauncherWindow(Adw.ApplicationWindow):
         finally:
             self.hide_launcher()
 
+    def _edit_selected(self) -> None:
+        """Ctrl+E: open Launcher Settings at the selected app or quicklink."""
+        row = self._list.get_selected_row()
+        if row is None:
+            return
+        edit = edit_target(row.result.id)
+        if edit is None:
+            return
+        self._app.open_settings(edit)
+        self.hide_launcher()
+
     def _complete(self) -> None:
         row = self._list.get_selected_row()
         if row is not None and row.result.completion:
@@ -282,6 +293,8 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.run_selected(alt=alt)
         elif ctrl and keyval in _NUMBER_KEYS:
             self._run_index(_NUMBER_KEYS[keyval] - 1, alt=False)
+        elif ctrl and keyval == Gdk.KEY_e:
+            self._edit_selected()
         elif keyval == Gdk.KEY_Tab and not mods:
             self._complete()  # always consume Tab so focus never leaves the search box
         else:
@@ -348,6 +361,16 @@ class LauncherWindow(Adw.ApplicationWindow):
         dark = Adw.StyleManager.get_default().get_dark()
         rgba.parse("#222226" if dark else "#ffffff")
         return rgba
+
+
+def edit_target(result_id: str) -> str | None:
+    """Which settings item Ctrl+E opens for a result, if any."""
+    kind, _, key = result_id.partition(":")
+    if kind == "app":
+        return result_id
+    if kind in ("quicklink", "websearch"):
+        return f"quicklink:{key}"
+    return None
 
 
 def _gicon(spec: str | None) -> Gio.Icon | None:

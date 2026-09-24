@@ -15,13 +15,21 @@ gi.require_version("Adw", "1")
 gi.require_version("GLibUnix", "2.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GLibUnix, Gtk  # noqa: E402
 
-from . import APP_ID, launching, paths  # noqa: E402
-from .config import Config, ConfigError, ensure_config, load_config  # noqa: E402
+from . import APP_ID, launching, paths, shortcuts  # noqa: E402
+from .config import Config, ConfigError, ensure_config, hotkey_owners, load_config  # noqa: E402
 from .engine import MODES, Engine  # noqa: E402
 from .favicons import FaviconCache  # noqa: E402
+from .file_watcher import FileWatcher  # noqa: E402
+from .files_index import FileIndex, IndexSettings  # noqa: E402
 from .providers.apps import AppsProvider  # noqa: E402
+from .providers.base import Result  # noqa: E402
 from .providers.commands import CommandsProvider  # noqa: E402
-from .providers.quicklinks import QuickLinksProvider, WebSearchProvider  # noqa: E402
+from .providers.files import FilesProvider  # noqa: E402
+from .providers.quicklinks import (  # noqa: E402
+    QuickLinksProvider,
+    WebSearchProvider,
+    fill_url,  # noqa: E402
+)
 from .store import UsageStore  # noqa: E402
 from .window import LauncherWindow  # noqa: E402
 
@@ -43,6 +51,7 @@ class LauncherApp(Adw.Application):
         self._reload_source = 0
         self._usage: UsageStore | None = None
         self._favicons: FaviconCache | None = None
+        self._file_watcher: FileWatcher | None = None
 
     # --- lifecycle -------------------------------------------------------------------
 
@@ -65,24 +74,28 @@ class LauncherApp(Adw.Application):
             call_soon=lambda fn: GLib.idle_add(lambda: (fn(), GLib.SOURCE_REMOVE)[1]),
         )
         apps = AppsProvider(self)
+        file_index = FileIndex()
+        self._file_watcher = FileWatcher(file_index)
         self._engine = Engine(
             {
                 "apps": apps,
                 "quicklinks": QuickLinksProvider(self, icons=self._website_icon),
                 "commands": CommandsProvider(self),
                 "websearch": WebSearchProvider(self, icons=self._website_icon),
+                "files": FilesProvider(self, file_index),
             },
             usage=self._usage,
         )
         self._engine.configure(self.config)
         self._prefetch_icons()
+        self._file_watcher.configure(IndexSettings.from_config(self.config.files))
         # Rebuild the app list lazily whenever .desktop files are added or removed.
         self._app_monitor = Gio.AppInfoMonitor.get()
         self._app_monitor.connect("changed", lambda _m: apps.invalidate())
         apps.query("")  # load the app list now rather than on the first keystroke
 
         self.window = LauncherWindow(self, self._engine, self.config)
-        self.window.set_problems(problems)
+        self.window.set_problems(problems + self._sync_shortcuts())
         self.window.realize()  # pay the first-show setup cost at startup, not on first use
         self._add_actions()
         self._watch_config()
@@ -93,6 +106,8 @@ class LauncherApp(Adw.Application):
             self._usage.close()
         if self._favicons is not None:
             self._favicons.shutdown()
+        if self._file_watcher is not None:
+            self._file_watcher.shutdown()
         Adw.Application.do_shutdown(self)
 
     def do_activate(self) -> None:
@@ -123,12 +138,14 @@ class LauncherApp(Adw.Application):
             ("reload", None, lambda p: self.reload_config()),
             ("open-config", None, lambda p: self.open_config()),
             ("quit", None, lambda p: self.quit_launcher()),
+            ("run", "s", lambda p: self.run_item(p.get_string())),
         ]
         if self._debug:
             actions += [
                 ("debug-snapshot", "s", lambda p: self.window.save_snapshot(p.get_string())),
                 ("debug-set-query", "s", lambda p: self.window.set_query(p.get_string())),
                 ("debug-run-selected", None, lambda p: self.window.run_selected()),
+                ("debug-run-selected-alt", None, lambda p: self.window.run_selected(alt=True)),
             ]
         for name, ptype, handler in actions:
             action = Gio.SimpleAction.new(name, GLib.VariantType.new(ptype) if ptype else None)
@@ -157,8 +174,9 @@ class LauncherApp(Adw.Application):
         self.config = config
         self._engine.configure(config)
         self._prefetch_icons()
+        self._file_watcher.configure(IndexSettings.from_config(config.files))
         self.window.apply_config(config)
-        self.window.set_problems(warnings)
+        self.window.set_problems(warnings + self._sync_shortcuts())
         log.info("config reloaded")
 
     def open_config(self) -> None:
@@ -188,6 +206,14 @@ class LauncherApp(Adw.Application):
     def copy_text(self, text: str) -> None:
         Gdk.Display.get_default().get_clipboard().set(text)
 
+    def open_file(self, path: str) -> None:
+        launching.open_file(path, self._launch_context())
+
+    def reveal_file(self, path: str) -> None:
+        # The file manager needs an activation token to raise its window.
+        token = self._launch_context().get_startup_notify_id(None, []) or ""
+        launching.reveal_file(path, token)
+
     def _website_icon(self, url: str) -> str | None:
         if not self.config.ui.favicons or self._favicons is None:
             return None
@@ -203,6 +229,54 @@ class LauncherApp(Adw.Application):
         # Carries an xdg-activation token, so GNOME focuses the launched app. The token
         # is only valid while our window is focused: run actions before hiding it.
         return Gdk.Display.get_default().get_app_launch_context()
+
+    def open_settings(self, edit: str | None = None) -> None:
+        argv = [sys.executable, "-m", "launcher", "--settings"]
+        if edit:
+            argv += ["--edit", edit]
+        token = self._launch_context().get_startup_notify_id(None, []) or None
+        launching.spawn(argv, APP_ID + ".Settings", token)
+
+    def run_item(self, item_id: str) -> None:
+        """What a per-item hotkey runs: `launcher --run app:<id>` / `quicklink:<name>`."""
+        kind, _, key = item_id.partition(":")
+        try:
+            if kind == "app":
+                self.launch_app(key)
+            elif kind == "quicklink":
+                link = next(
+                    (q for q in self.config.quicklinks if q.name.casefold() == key.casefold()),
+                    None,
+                )
+                if link is None:
+                    raise LookupError(f"there is no quicklink named '{key}' any more")
+                if "{query}" in link.url and link.alias:
+                    # A search: open the launcher with "g " typed, ready for the query.
+                    self.window.show_mode("all")
+                    self.window.set_query(f"{link.alias} ")
+                    return
+                self.open_uri(fill_url(link.url, ""))
+            else:
+                raise LookupError(f"unknown item '{item_id}'")
+        except Exception as e:
+            self.notify_error("Launcher hotkey failed", str(e))
+            return
+        self._engine.record(Result(id=item_id, title=key))
+
+    def _sync_shortcuts(self) -> list[str]:
+        """Register the config's hotkeys with GNOME; returns problems for the banner."""
+        problems = []
+        for key, owner in hotkey_owners(self.config):
+            ok, keyval, _mods = Gtk.accelerator_parse(key)
+            if not ok or keyval == 0:
+                problems.append(f"{owner}: '{key}' is not a key GNOME understands")
+        if problems:
+            return problems  # don't half-apply a config with a broken hotkey
+        try:
+            return shortcuts.sync(self.config)
+        except Exception as e:
+            log.exception("syncing shortcuts failed")
+            return [f"could not register shortcuts with GNOME: {e}"]
 
     def notify_error(self, title: str, body: str) -> None:
         log.error("%s: %s", title, body)

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import accel
+
 
 class ConfigError(Exception):
     pass
@@ -32,13 +34,53 @@ class QuickLink:
     alias: str = ""
     icon: str = ""  # themed icon name or absolute path
     fallback: bool = False  # offer "Search <name> for …" for any typed text
+    hotkey: str = ""  # global shortcut, e.g. "<Super><Shift>g"
+
+
+@dataclass(frozen=True)
+class AppSettings:
+    alias: str = ""
+    hotkey: str = ""
+
+
+@dataclass(frozen=True)
+class ShortcutsConfig:
+    """Global shortcuts for the launcher's modes ("" = not bound)."""
+
+    launcher: str = "<Super><Shift>Return"
+    files: str = "<Super><Shift>f"
+    clipboard: str = ""  # bound once clipboard history exists (M4)
+    snippets: str = ""  # bound once snippets exist (M5)
+
+
+DEFAULT_EXCLUDES = (
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "*.part",
+    "*.crdownload",
+    "*.tmp",
+    ".~lock.*",
+)
+
+
+@dataclass(frozen=True)
+class FilesConfig:
+    folders: tuple[str, ...] = field(default=("~/Downloads", "~/Documents"), metadata={"list": str})
+    exclude: tuple[str, ...] = field(default=DEFAULT_EXCLUDES, metadata={"list": str})
+    max_depth: int = 8  # levels below each folder
+    show_hidden: bool = False  # names starting with "."
 
 
 @dataclass(frozen=True)
 class Config:
     ui: UIConfig = field(default_factory=UIConfig)
-    # alias -> desktop file id ("code.desktop") or app name ("Visual Studio Code")
-    aliases: dict[str, str] = field(default_factory=dict, metadata={"map": str})
+    files: FilesConfig = field(default_factory=FilesConfig)
+    shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig)
+    # desktop file id ("code.desktop") -> alias / hotkey
+    apps: dict[str, AppSettings] = field(default_factory=dict, metadata={"tables": AppSettings})
     quicklinks: tuple[QuickLink, ...] = field(
         default_factory=tuple, metadata={"items": QuickLink, "key": "quicklink"}
     )
@@ -48,6 +90,7 @@ class Config:
 _RANGES: dict[str, tuple[int, int]] = {
     "ui.width": (400, 1600),
     "ui.max_results": (1, 20),
+    "files.max_depth": (1, 32),
 }
 
 DEFAULT_CONFIG_TEXT = """\
@@ -59,14 +102,33 @@ max_results = 8           # rows shown at once (1-20)
 hide_on_focus_loss = true # hide the launcher when another window gets focus
 favicons = true           # website icons for quicklinks (fetched via Google's favicon service)
 
-# Short names for apps: alias = "desktop file id" or "App Name".
-[aliases]
-# code = "code.desktop"
-# ff = "Firefox"
+# File search (Super+Shift+F, or `launcher --mode files`).
+[files]
+folders = ["~/Downloads", "~/Documents"]
+# Names (or glob patterns) skipped anywhere below those folders:
+exclude = [
+  ".git", "node_modules", "__pycache__", ".venv", "venv",
+  "*.part", "*.crdownload", "*.tmp", ".~lock.*",
+]
+max_depth = 8             # how many folder levels deep to search (1-32)
+show_hidden = false       # include names starting with "."
+
+# Global shortcuts ("" = none). Easiest to change in Launcher Settings, which checks
+# for clashes with GNOME's own shortcuts.
+[shortcuts]
+launcher = "<Super><Shift>Return"
+files = "<Super><Shift>f"
+
+# Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
+# and press Ctrl+E to set these without editing this file.
+# [apps."code.desktop"]
+# alias = "code"
+# hotkey = "<Super><Shift>c"
 
 # Quicklinks open a URL. Put {query} in the URL to make it a search:
 # "g cats" opens the Google URL with {query} replaced by "cats".
 # fallback = true offers the search for anything you type.
+# hotkey = "<Super><Shift>g" opens the link (or starts a search) from anywhere.
 [[quicklink]]
 name = "Google Search"
 alias = "g"
@@ -83,8 +145,16 @@ fallback = true
 def parse_config(data: dict[str, Any]) -> tuple[Config, list[str]]:
     """Build a Config from parsed TOML. Returns the config and non-fatal warnings."""
     warnings: list[str] = []
+    data = dict(data)
+    legacy = data.pop("aliases", None)
+    if legacy:
+        raise ConfigError(
+            "[aliases] was replaced by per-app tables: "
+            '[apps."code.desktop"] alias = "code" (or use Ctrl+E in the launcher)'
+        )
     config = _build(Config, data, "", warnings)
-    _check_links_and_aliases(config, warnings)
+    _check_links_and_aliases(config)
+    _check_hotkeys(config)
     return config, warnings
 
 
@@ -135,6 +205,19 @@ def _build(cls: type, data: Any, prefix: str, warnings: list[str]) -> Any:
                 _build(f.metadata["items"], item, f"{path}[{i + 1}].", warnings)
                 for i, item in enumerate(value)
             )
+        elif "list" in f.metadata:
+            if not isinstance(value, list):
+                raise ConfigError(f"'{path}' must be a list")
+            values[f.name] = tuple(
+                _check_value(f"{path}[{i + 1}]", v, f.metadata["list"]) for i, v in enumerate(value)
+            )
+        elif "tables" in f.metadata:
+            if not isinstance(value, dict):
+                raise ConfigError(f"[{path}] must be a table")
+            values[f.name] = {
+                k: _build(f.metadata["tables"], v, f'{path}."{k}".', warnings)
+                for k, v in value.items()
+            }
         elif "map" in f.metadata:
             if not isinstance(value, dict):
                 raise ConfigError(f"[{path}] must be a table")
@@ -171,7 +254,7 @@ def _check_value(key: str, value: Any, expected: type) -> Any:
     return value
 
 
-def _check_links_and_aliases(config: Config, warnings: list[str]) -> None:
+def _check_links_and_aliases(config: Config) -> None:
     seen: dict[str, str] = {}
 
     def claim(alias: str, owner: str) -> None:
@@ -181,12 +264,11 @@ def _check_links_and_aliases(config: Config, warnings: list[str]) -> None:
             raise ConfigError(f"{owner}: alias {alias!r} must not contain spaces")
         key = alias.casefold()
         if key in seen:
-            warnings.append(f"alias '{alias}' is used by both {seen[key]} and {owner}")
-        else:
-            seen[key] = owner
+            raise ConfigError(f"alias '{alias}' is used by both {seen[key]} and {owner}")
+        seen[key] = owner
 
-    for alias, target in config.aliases.items():
-        claim(alias, f"app alias '{alias}' ({target})")
+    for app_id, app in config.apps.items():
+        claim(app.alias, f"app '{app_id}'")
     for i, link in enumerate(config.quicklinks, 1):
         owner = f"quicklink '{link.name}'"
         if "://" not in link.url and not link.url.startswith("mailto:"):
@@ -194,3 +276,28 @@ def _check_links_and_aliases(config: Config, warnings: list[str]) -> None:
         if link.fallback and "{query}" not in link.url:
             raise ConfigError(f"{owner}: fallback = true needs {{query}} in the url")
         claim(link.alias, owner)
+    names = [link.name.casefold() for link in config.quicklinks]
+    if len(set(names)) != len(names):
+        raise ConfigError("two quicklinks have the same name; names must be unique")
+
+
+def hotkey_owners(config: Config) -> list[tuple[str, str]]:
+    """(hotkey, owner description) for every hotkey set in the config."""
+    owners = [
+        (getattr(config.shortcuts, f.name), f"the launcher's {f.name} shortcut")
+        for f in dataclasses.fields(ShortcutsConfig)
+    ]
+    owners += [(app.hotkey, f"app '{app_id}'") for app_id, app in config.apps.items()]
+    owners += [(link.hotkey, f"quicklink '{link.name}'") for link in config.quicklinks]
+    return [(key, owner) for key, owner in owners if key]
+
+
+def _check_hotkeys(config: Config) -> None:
+    seen: dict[str, str] = {}
+    for key, owner in hotkey_owners(config):
+        if problem := accel.hotkey_problem(key):
+            raise ConfigError(f"{owner}: {problem}")
+        canonical = accel.normalize(key).casefold()
+        if canonical in seen:
+            raise ConfigError(f"{key} is used by both {seen[canonical]} and {owner}")
+        seen[canonical] = owner

@@ -22,3 +22,10 @@ def test_each_result_runs_its_own_command(host):
     results["command:reload"].action()
     results["command:open-config"].action()
     assert host.calls == [("reload",), ("open-config",)]
+
+
+def test_settings_command_opens_settings(host):
+    top = max(CommandsProvider(host).query("settings"), key=lambda r: r.score)
+    assert top.id == "command:settings"
+    top.action()
+    assert host.calls == [("settings", None)]

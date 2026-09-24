@@ -21,6 +21,14 @@ class _Command:
 
 _COMMANDS = (
     _Command(
+        "settings",
+        "Launcher Settings",
+        "Shortcuts, aliases, quicklinks and file search folders",
+        "preferences-system",
+        ("launcher settings", "preferences", "hotkeys", "aliases", "quicklinks"),
+        lambda host: host.open_settings(),
+    ),
+    _Command(
         "reload",
         "Reload Launcher Config",
         "Re-read ~/.config/launcher/config.toml",
@@ -30,10 +38,10 @@ _COMMANDS = (
     ),
     _Command(
         "open-config",
-        "Open Launcher Config",
-        "Edit ~/.config/launcher/config.toml",
+        "Open Launcher Config File",
+        "Edit ~/.config/launcher/config.toml in a text editor",
         "document-edit-symbolic",
-        ("launcher settings", "preferences", "config"),
+        ("config", "toml"),
         lambda host: host.open_config(),
     ),
     _Command(

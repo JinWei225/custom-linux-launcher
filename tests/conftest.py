@@ -25,6 +25,15 @@ class FakeHost:
     def copy_text(self, text):
         self.calls.append(("copy", text))
 
+    def open_file(self, path):
+        self.calls.append(("open-file", path))
+
+    def reveal_file(self, path):
+        self.calls.append(("reveal", path))
+
+    def open_settings(self, edit=None):
+        self.calls.append(("settings", edit))
+
 
 @pytest.fixture
 def host():

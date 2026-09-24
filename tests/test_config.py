@@ -4,6 +4,7 @@ import pytest
 
 from launcher.config import (
     DEFAULT_CONFIG_TEXT,
+    AppSettings,
     Config,
     ConfigError,
     QuickLink,
@@ -75,7 +76,7 @@ def test_bad_toml_raises(tmp_path):
 def test_quicklinks_and_aliases():
     config, warnings = parse_config(
         {
-            "aliases": {"code": "code.desktop"},
+            "apps": {"code.desktop": {"alias": "code", "hotkey": "<Super><Shift>c"}},
             "quicklink": [
                 {"name": "GitHub", "alias": "gh", "url": "https://github.com/"},
                 {"name": "G", "url": "https://g.com/?q={query}", "fallback": True},
@@ -83,7 +84,7 @@ def test_quicklinks_and_aliases():
         }
     )
     assert warnings == []
-    assert config.aliases == {"code": "code.desktop"}
+    assert config.apps == {"code.desktop": AppSettings("code", "<Super><Shift>c")}
     assert config.quicklinks == (
         QuickLink(name="GitHub", url="https://github.com/", alias="gh"),
         QuickLink(name="G", url="https://g.com/?q={query}", fallback=True),
@@ -98,7 +99,8 @@ def test_quicklinks_and_aliases():
         ({"quicklink": [{"name": "x", "url": "https://a", "fallback": True}]}, "{query}"),
         ({"quicklink": [{"name": "x", "url": "https://a", "alias": "a b"}]}, "spaces"),
         ({"quicklink": {"name": "x"}}, "list of tables"),
-        ({"aliases": {"code": 1}}, "aliases.code"),
+        ({"apps": {"code.desktop": {"alias": 1}}}, 'apps."code.desktop".alias'),
+        ({"aliases": {"code": "code.desktop"}}, "replaced by per-app tables"),
     ],
 )
 def test_invalid_links_raise(data, message):
@@ -106,14 +108,46 @@ def test_invalid_links_raise(data, message):
         parse_config(data)
 
 
-def test_duplicate_alias_warns_case_insensitively():
-    _, warnings = parse_config(
-        {
-            "aliases": {"GH": "GitHub Desktop"},
-            "quicklink": [{"name": "GitHub", "alias": "gh", "url": "https://github.com/"}],
-        }
-    )
-    assert len(warnings) == 1 and "'gh'" in warnings[0]
+def test_duplicate_alias_is_an_error_case_insensitively():
+    with pytest.raises(ConfigError, match="'gh' is used by both"):
+        parse_config(
+            {
+                "apps": {"github-desktop.desktop": {"alias": "GH"}},
+                "quicklink": [{"name": "GitHub", "alias": "gh", "url": "https://github.com/"}],
+            }
+        )
+
+
+def test_empty_legacy_aliases_table_is_ignored():
+    assert parse_config({"aliases": {}}) == (Config(), [])
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"shortcuts": {"files": "f"}}, "needs Super, Ctrl or Alt"),
+        ({"shortcuts": {"files": "<Super><Bogus>f"}}, "not a shortcut"),
+        (
+            {
+                "shortcuts": {"files": "<Shift><Super>F"},
+                "apps": {"a": {"hotkey": "<super><shift>f"}},
+            },
+            "is used by both the launcher's files shortcut and app 'a'",
+        ),
+        (
+            {
+                "quicklink": [
+                    {"name": "A", "url": "https://a"},
+                    {"name": "a", "url": "https://b"},
+                ]
+            },
+            "same name",
+        ),
+    ],
+)
+def test_hotkey_and_name_rules(data, message):
+    with pytest.raises(ConfigError, match=message):
+        parse_config(data)
 
 
 def test_unknown_quicklink_key_warns():

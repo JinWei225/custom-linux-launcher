@@ -42,3 +42,15 @@ def test_build_command_without_token():
 def test_build_command_forwards_activation_token():
     cmd = build_command("quit", None, {"XDG_ACTIVATION_TOKEN": "tok_1"})
     assert cmd[-2:] == ["@av []", "{'activation-token': <'tok_1'>}"]
+
+
+def test_run_action():
+    assert requested_action(parse_args(["--run", "app:code.desktop"])) == (
+        "run",
+        "app:code.desktop",
+    )
+
+
+def test_settings_flags():
+    args = parse_args(["--settings", "--edit", "quicklink:GitHub"])
+    assert args.settings and args.edit == "quicklink:GitHub"
