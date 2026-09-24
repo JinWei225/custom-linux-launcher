@@ -17,7 +17,7 @@ MODES: dict[str, tuple[str, ...]] = {
     "all": ("apps", "quicklinks", "commands", "websearch"),
     "apps": ("apps",),
     "files": ("files",),
-    "clipboard": (),
+    "clipboard": ("clipboard",),
     "snippets": (),
 }
 

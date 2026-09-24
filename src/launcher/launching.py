@@ -33,8 +33,16 @@ def scope_name(app_id: str, pid: int) -> str:
     return f"app-launcher-{escaped}-{pid}.scope"
 
 
+def desktop_app(app_id: str) -> GioUnix.DesktopAppInfo | None:
+    """The installed app with this desktop id, or None (PyGObject raises instead)."""
+    try:
+        return GioUnix.DesktopAppInfo.new(app_id)
+    except TypeError:  # "constructor returned NULL"
+        return None
+
+
 def launch_app(app_id: str, uris: list[str], context: Gio.AppLaunchContext | None) -> None:
-    info = GioUnix.DesktopAppInfo.new(app_id)
+    info = desktop_app(app_id)
     if info is None:
         raise LookupError(f"application {app_id!r} is not installed")
     _launch(info, uris, context)

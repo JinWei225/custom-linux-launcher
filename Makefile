@@ -8,7 +8,8 @@ BIN_DIR     := $(HOME)/.local/bin
 APPS_DIR    := $(HOME)/.local/share/applications
 UNIT_DIR    := $(HOME)/.config/systemd/user
 
-.PHONY: venv dev test lint format install uninstall logs install-espanso-fix uninstall-espanso-fix
+.PHONY: venv dev test lint format install uninstall logs install-espanso-fix uninstall-espanso-fix \
+	install-extension test-extension
 
 venv: $(VENV)/.done
 $(VENV)/.done: pyproject.toml
@@ -69,3 +70,20 @@ uninstall-espanso-fix:
 	rm -rf $(ESPANSO_SHIM) $(ESPANSO_DROPIN)
 	systemctl --user daemon-reload
 	systemctl --user restart espanso.service
+
+# GNOME Shell extension used for clipboard history and paste. On Wayland a newly
+# installed extension is only picked up after logging out and back in.
+EXT_UUID := launcher-helper@jinwei.github.io
+EXT_DIR  := $(HOME)/.local/share/gnome-shell/extensions/$(EXT_UUID)
+
+install-extension:
+	install -d $(EXT_DIR)
+	install -m644 extension/$(EXT_UUID)/metadata.json extension/$(EXT_UUID)/extension.js $(EXT_DIR)/
+	gnome-extensions enable $(EXT_UUID) 2>/dev/null || \
+	  gsettings set org.gnome.shell enabled-extensions \
+	    "$$(python3 -c "import ast,sys; l=ast.literal_eval(sys.argv[1]); l+=[] if '$(EXT_UUID)' in l else ['$(EXT_UUID)']; print(l)" "$$(gsettings get org.gnome.shell enabled-extensions)")"
+	@echo "Installed. Log out and back in once so GNOME Shell loads it."
+
+# Test the extension in a private headless GNOME Shell (no logout needed).
+test-extension: venv
+	tools/nested-shell.sh

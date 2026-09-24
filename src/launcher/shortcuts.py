@@ -71,6 +71,11 @@ def desired_bindings(config: Config, command: str) -> list[Binding]:
         "launcher": ("launcher-main", "Launcher", run),
         "files": ("launcher-files", "Launcher: Files", f"{run} --mode files"),
         "clipboard": ("launcher-clipboard", "Launcher: Clipboard", f"{run} --mode clipboard"),
+        "clipboard_pause": (
+            "launcher-clipboard-pause",
+            "Launcher: Pause Clipboard Recording",
+            f"{run} --clipboard-pause",
+        ),
         "snippets": ("launcher-snippets", "Launcher: Snippets", f"{run} --mode snippets"),
     }
     bindings = []

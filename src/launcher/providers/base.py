@@ -7,7 +7,7 @@ that needs the running app (launching, reloading, quitting) goes through Host.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 # Score for an exact alias match: above any fuzzy match (which tops out at 1.0).
@@ -27,6 +27,12 @@ class Result:
     completion: str | None = None  # text Tab puts in the search box, e.g. "g "
     learn: bool = True  # record picks for frecency (off for one-off results)
     fallback: bool = False  # always listed last, and never cut off by the result limit
+    # Shown in the preview pane (clipboard mode): ("text", text) or ("image", png path).
+    preview: tuple[str, str] | None = None
+    # Extra keyboard actions by name: "pin" (Ctrl+Shift+P), "delete" (Ctrl+Delete).
+    key_actions: dict[str, Callable[[], None]] = field(default_factory=dict)
+    # Group heading shown above the first result of each section ("Pinned", "Recent").
+    section: str | None = None
     score: float = 0.0
 
 
@@ -40,6 +46,13 @@ class Host(Protocol):
     def open_file(self, path: str) -> None: ...
     def reveal_file(self, path: str) -> None: ...
     def open_settings(self, edit: str | None = None) -> None: ...
+    def paste_clip(self, clip_id: int) -> None: ...
+    def copy_clip(self, clip_id: int) -> None: ...
+    def pin_clip(self, clip_id: int, pinned: bool) -> None: ...
+    def delete_clip(self, clip_id: int) -> None: ...
+    def toggle_clipboard_pause(self) -> None: ...
+    def clear_clipboard(self) -> None: ...
+    def clipboard_paused(self) -> bool: ...
 
 
 class Provider(Protocol):

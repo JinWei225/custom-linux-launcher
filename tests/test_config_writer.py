@@ -93,3 +93,29 @@ def test_missing_quicklink_is_reported(writer):
 def test_lists_are_written_as_arrays(writer):
     config = writer.set_value("files", "folders", ["~/A", "~/B"])
     assert config.files.folders == ("~/A", "~/B")
+
+
+def test_new_keys_go_after_the_last_key_not_after_trailing_comments(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[shortcuts]\n"
+        'launcher = "<Control>space"\n'
+        "\n"
+        "# Section about quicklinks\n"
+        "[[quicklink]]\n"
+        'name = "A"\n'
+        'url = "https://a"\n'
+        "\n"
+        "# Another comment\n"
+        "[[quicklink]]\n"
+        'name = "B"\n'
+        'url = "https://b"\n'
+    )
+    writer = ConfigWriter(path)
+    writer.set_value("shortcuts", "files", "<Super><Shift>f")
+    writer.save_quicklink("A", QuickLink("A", "https://a", hotkey="<Super>a"))
+    lines = path.read_text().splitlines()
+    assert lines[:3] == ["[shortcuts]", 'launcher = "<Control>space"', 'files = "<Super><Shift>f"']
+    a_block = lines[lines.index('name = "A"') : lines.index('name = "A"') + 3]
+    assert a_block == ['name = "A"', 'url = "https://a"', 'hotkey = "<Super>a"']
+    assert load_config(path)[1] == []  # nothing ended up in the wrong table

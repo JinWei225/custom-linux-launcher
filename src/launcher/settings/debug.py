@@ -39,7 +39,7 @@ def render_all(window, directory: str) -> None:
     from .dialogs import AppDialog, QuicklinkDialog, ShortcutDialog
 
     steps = []
-    for name in ("general", "shortcuts", "apps", "quicklinks", "files"):
+    for name in ("general", "shortcuts", "apps", "quicklinks", "clipboard", "files"):
         steps.append((lambda n=name: window._stack.set_visible_child_name(n), f"page-{name}"))
     first_link = window.config.quicklinks[0].name if window.config.quicklinks else None
     apps = window.app_catalog()

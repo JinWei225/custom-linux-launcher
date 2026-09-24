@@ -56,6 +56,32 @@ _COMMANDS = (
 )
 
 
+class _ClipboardPauseCommand:
+    """Title depends on the current state, so it is built per query."""
+
+    @staticmethod
+    def command(host: Host) -> _Command:
+        paused = host.clipboard_paused()
+        return _Command(
+            "clipboard-pause",
+            "Resume Clipboard Recording" if paused else "Pause Clipboard Recording",
+            "Recording is paused" if paused else "Stop saving what you copy until resumed",
+            "media-playback-start-symbolic" if paused else "media-playback-pause-symbolic",
+            ("clipboard", "privacy", "pause", "resume", "incognito"),
+            lambda h: h.toggle_clipboard_pause(),
+        )
+
+
+_CLEAR_CLIPBOARD = _Command(
+    "clipboard-clear",
+    "Clear Clipboard History",
+    "Delete every entry except pinned ones",
+    "edit-clear-all-symbolic",
+    ("clipboard", "delete", "forget", "wipe"),
+    lambda host: host.clear_clipboard(),
+)
+
+
 class CommandsProvider:
     name = "commands"
 
@@ -66,7 +92,7 @@ class CommandsProvider:
         if not text.strip():
             return []
         results = []
-        for cmd in _COMMANDS:
+        for cmd in (*_COMMANDS, _ClipboardPauseCommand.command(self._host), _CLEAR_CLIPBOARD):
             score = best_score(text, (cmd.title, *cmd.keywords))
             if score is None:
                 continue

@@ -49,8 +49,47 @@ class ShortcutsConfig:
 
     launcher: str = "<Super><Shift>Return"
     files: str = "<Super><Shift>f"
-    clipboard: str = ""  # bound once clipboard history exists (M4)
+    clipboard: str = "<Super><Shift>v"
+    clipboard_pause: str = "<Super><Shift>p"  # pause / resume clipboard recording
     snippets: str = ""  # bound once snippets exist (M5)
+
+
+# Password managers: never record what they copy (they also mark secrets with a hint).
+DEFAULT_CLIPBOARD_EXCLUDES = (
+    "org.keepassxc.KeePassXC",
+    "KeePassXC",
+    "Bitwarden",
+    "com.bitwarden.desktop",
+    "1Password",
+    "org.gnome.World.Secrets",
+)
+# Terminals paste with Ctrl+Shift+V instead of Ctrl+V.
+DEFAULT_TERMINALS = (
+    "org.gnome.Ptyxis",
+    "com.mitchellh.ghostty",
+    "org.gnome.Console",
+    "org.gnome.Terminal",
+    "gnome-terminal-server",
+    "kitty",
+    "Alacritty",
+    "org.wezfurlong.wezterm",
+    "foot",
+    "com.gexperts.Tilix",
+    "org.kde.konsole",
+    "xterm",
+)
+
+
+@dataclass(frozen=True)
+class ClipboardConfig:
+    enabled: bool = True
+    max_entries: int = 500  # pinned entries are never removed and don't count
+    max_days: int = 30
+    max_image_mb: int = 20
+    exclude_apps: tuple[str, ...] = field(
+        default=DEFAULT_CLIPBOARD_EXCLUDES, metadata={"list": str}
+    )
+    terminal_apps: tuple[str, ...] = field(default=DEFAULT_TERMINALS, metadata={"list": str})
 
 
 DEFAULT_EXCLUDES = (
@@ -79,6 +118,7 @@ class Config:
     ui: UIConfig = field(default_factory=UIConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig)
+    clipboard: ClipboardConfig = field(default_factory=ClipboardConfig)
     # desktop file id ("code.desktop") -> alias / hotkey
     apps: dict[str, AppSettings] = field(default_factory=dict, metadata={"tables": AppSettings})
     quicklinks: tuple[QuickLink, ...] = field(
@@ -91,6 +131,9 @@ _RANGES: dict[str, tuple[int, int]] = {
     "ui.width": (400, 1600),
     "ui.max_results": (1, 20),
     "files.max_depth": (1, 32),
+    "clipboard.max_entries": (10, 10_000),
+    "clipboard.max_days": (1, 3650),
+    "clipboard.max_image_mb": (1, 200),
 }
 
 DEFAULT_CONFIG_TEXT = """\
@@ -118,6 +161,26 @@ show_hidden = false       # include names starting with "."
 [shortcuts]
 launcher = "<Super><Shift>Return"
 files = "<Super><Shift>f"
+clipboard = "<Super><Shift>v"
+clipboard_pause = "<Super><Shift>p"
+
+# Clipboard history (Super+Shift+V). Needs the Launcher Helper GNOME extension.
+[clipboard]
+enabled = true
+max_entries = 500         # pinned entries are kept forever and don't count
+max_days = 30
+max_image_mb = 20
+# Never recorded (password managers); app ids or window classes:
+exclude_apps = [
+  "org.keepassxc.KeePassXC", "KeePassXC", "Bitwarden", "com.bitwarden.desktop",
+  "1Password", "org.gnome.World.Secrets",
+]
+# Paste with Ctrl+Shift+V into these:
+terminal_apps = [
+  "org.gnome.Ptyxis", "com.mitchellh.ghostty", "org.gnome.Console", "org.gnome.Terminal",
+  "gnome-terminal-server", "kitty", "Alacritty", "org.wezfurlong.wezterm", "foot",
+  "com.gexperts.Tilix", "org.kde.konsole", "xterm",
+]
 
 # Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
 # and press Ctrl+E to set these without editing this file.

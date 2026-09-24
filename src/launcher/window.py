@@ -11,6 +11,8 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Pango", "1.0")
+from collections.abc import Callable  # noqa: E402
+
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .config import Config  # noqa: E402
@@ -33,12 +35,25 @@ PLACEHOLDERS = {
     "snippets": "Search snippets…",
 }
 
+# Modes with a preview pane, a scrolling list and a key-hint footer.
+PREVIEW_MODES = {"clipboard", "snippets"}
+PREVIEW_WIDTH = 380
+LIST_LIMIT_PREVIEW_MODES = 200
+FOOTERS = {
+    "clipboard": "Enter paste · Alt+Enter copy only · Ctrl+Shift+P pin · Ctrl+Del delete",
+}
+
 _NUMBER_KEYS = {getattr(Gdk, f"KEY_{n}"): n for n in range(1, 10)}
 _ENTER_KEYS = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter)
 
 
 class ResultRow(Gtk.ListBoxRow):
-    def __init__(self, result: Result, index: int) -> None:
+    def __init__(
+        self,
+        result: Result,
+        index: int,
+        on_key_action: Callable[[ResultRow, str], None] | None = None,
+    ) -> None:
         super().__init__()
         self.result = result
 
@@ -68,6 +83,17 @@ class ResultRow(Gtk.ListBoxRow):
             hint.add_css_class("dim-label")
             hint.add_css_class("caption")
             box.append(hint)
+        if "delete" in result.key_actions and on_key_action is not None:
+            trash = Gtk.Button(
+                icon_name="user-trash-symbolic",
+                valign=Gtk.Align.CENTER,
+                tooltip_text="Delete (Ctrl+Delete)",
+                focusable=False,  # keep keyboard focus in the search box
+            )
+            trash.add_css_class("flat")
+            trash.add_css_class("row-delete")
+            trash.connect("clicked", lambda _b: on_key_action(self, "delete"))
+            box.append(trash)
         self.set_child(box)
 
 
@@ -112,17 +138,66 @@ class LauncherWindow(Adw.ApplicationWindow):
         self._list.add_css_class("results")
         self._list.connect("row-activated", lambda _l, row: self._run(row.result, alt=False))
 
+        self._list.connect("row-selected", lambda _l, row: self._update_preview(row))
+        self._list.set_header_func(_section_header)
+        placeholder = Gtk.Label(label="Nothing here yet", margin_top=24, margin_bottom=24)
+        placeholder.add_css_class("dim-label")
+        self._list.set_placeholder(placeholder)
+
         self._scroller = Gtk.ScrolledWindow(
             hscrollbar_policy=Gtk.PolicyType.NEVER,
             propagate_natural_height=True,
             child=self._list,
             visible=False,
+            hexpand=True,
         )
+
+        # Preview pane (clipboard mode): wrapped text, or the image scaled to fit.
+        self._preview_text = Gtk.TextView(
+            editable=False,
+            cursor_visible=False,
+            wrap_mode=Gtk.WrapMode.WORD_CHAR,
+            top_margin=8,
+            bottom_margin=8,
+            left_margin=8,
+            right_margin=8,
+        )
+        self._preview_text.add_css_class("preview-text")
+        self._preview_picture = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
+        self._preview_stack = Gtk.Stack()
+        # A scrolled window that never scrolls: it just stops a large image or long line
+        # from asking for more width than PREVIEW_WIDTH.
+        self._preview = Gtk.ScrolledWindow(
+            child=self._preview_stack,
+            hscrollbar_policy=Gtk.PolicyType.NEVER,
+            vscrollbar_policy=Gtk.PolicyType.NEVER,
+            width_request=PREVIEW_WIDTH,
+            hexpand=False,
+            visible=False,
+        )
+        self._preview.add_css_class("preview")
+        self._preview_stack.add_named(Gtk.Box(), "empty")
+        self._preview_stack.add_named(
+            Gtk.ScrolledWindow(child=self._preview_text, hscrollbar_policy=Gtk.PolicyType.NEVER),
+            "text",
+        )
+        self._preview_stack.add_named(self._preview_picture, "image")
+
+        body = Gtk.Box()
+        body.append(self._scroller)
+        body.append(self._preview)
+
+        self._status = Gtk.Label(xalign=0, wrap=True, max_width_chars=1, visible=False)
+        self._status.add_css_class("status-line")
+        self._footer = Gtk.Label(xalign=0, visible=False, ellipsize=Pango.EllipsizeMode.END)
+        self._footer.add_css_class("footer")
 
         self._content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._content.append(self._banner)
         self._content.append(self._entry)
-        self._content.append(self._scroller)
+        self._content.append(self._status)
+        self._content.append(body)
+        self._content.append(self._footer)
         self.set_content(self._content)
 
         keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
@@ -142,6 +217,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         self._shown_at = time.monotonic()
         self._mode = mode
         self._entry.set_placeholder_text(PLACEHOLDERS.get(mode, ""))
+        self._apply_layout()
         if self._entry.get_text():
             self._entry.set_text("")  # triggers _refresh via "changed"
         else:
@@ -149,6 +225,14 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.present()
         self._entry.grab_focus()
         GLib.timeout_add(FOCUS_CHECK_MS, self._check_focus)
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def refresh_layout(self) -> None:
+        """Re-read mode status (helper availability, pause) while the window is open."""
+        self._apply_layout()
 
     def toggle_mode(self, mode: str) -> None:
         if self.get_visible() and mode == self._mode:
@@ -177,10 +261,26 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def apply_config(self, config: Config) -> None:
         self.config = config
-        self._content.set_size_request(config.ui.width, -1)
-        self._scroller.set_max_content_height(config.ui.max_results * ROW_HEIGHT)
+        self._apply_layout()
         if self.get_visible():
             self._refresh()
+
+    def _apply_layout(self) -> None:
+        preview_mode = self._mode in PREVIEW_MODES
+        height = self.config.ui.max_results * ROW_HEIGHT
+        width = self.config.ui.width + (PREVIEW_WIDTH if preview_mode else 0)
+        self._content.set_size_request(width, -1)
+        self._scroller.set_size_request(self.config.ui.width if preview_mode else -1, -1)
+        self._scroller.set_max_content_height(height)
+        # A fixed height in preview modes, so the window doesn't jump while typing.
+        self._scroller.set_min_content_height(height if preview_mode else -1)
+        self._preview.set_visible(preview_mode)
+        footer = FOOTERS.get(self._mode)
+        self._footer.set_text(footer or "")
+        self._footer.set_visible(bool(footer))
+        status = self._app.mode_status(self._mode) if hasattr(self._app, "mode_status") else None
+        self._status.set_text(status or "")
+        self._status.set_visible(bool(status))
 
     def set_problems(self, problems: list[str]) -> None:
         self._problem_label.set_text("Config: " + "; ".join(problems) if problems else "")
@@ -204,14 +304,52 @@ class LauncherWindow(Adw.ApplicationWindow):
     # --- results ---------------------------------------------------------------------
 
     def _refresh(self) -> None:
-        results = self._engine.query(self._entry.get_text(), self._mode, self.config.ui.max_results)
+        preview_mode = self._mode in PREVIEW_MODES
+        limit = LIST_LIMIT_PREVIEW_MODES if preview_mode else self.config.ui.max_results
+        results = self._engine.query(self._entry.get_text(), self._mode, limit)
         self._list.remove_all()
         for i, result in enumerate(results):
-            self._list.append(ResultRow(result, i))
+            self._list.append(ResultRow(result, i, self._row_action))
         first = self._list.get_row_at_index(0)
         if first is not None:
             self._list.select_row(first)
-        self._scroller.set_visible(bool(results))
+        else:
+            self._update_preview(None)
+        self._scroller.set_visible(bool(results) or preview_mode)
+        self._scroller.get_vadjustment().set_value(0)
+
+    def _update_preview(self, row: Gtk.ListBoxRow | None) -> None:
+        preview = row.result.preview if row is not None else None
+        if preview is None:
+            self._preview_stack.set_visible_child_name("empty")
+        elif preview[0] == "image":
+            self._preview_picture.set_filename(preview[1])
+            self._preview_stack.set_visible_child_name("image")
+        else:
+            self._preview_text.get_buffer().set_text(preview[1])
+            self._preview_stack.set_visible_child_name("text")
+
+    def _key_action(self, name: str) -> None:
+        """Pin / delete the selected entry and stay on the same row."""
+        row = self._list.get_selected_row()
+        if row is not None:
+            self._row_action(row, name)
+
+    def _row_action(self, row: ResultRow, name: str) -> None:
+        action = row.result.key_actions.get(name)
+        if action is None:
+            return
+        index = row.get_index()
+        try:
+            action()
+        except Exception as e:
+            log.exception("%s failed for %s", name, row.result.id)
+            self._app.notify_error(f"Could not {name} “{row.result.title}”", str(e))
+        self._refresh()
+        target = self._list.get_row_at_index(index) or self._list.get_row_at_index(index - 1)
+        if target is not None:
+            self._list.select_row(target)
+            self._scroll_to(target)
 
     def _move_selection(self, delta: int) -> None:
         row = self._list.get_selected_row()
@@ -282,6 +420,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         mods = state & Gtk.accelerator_get_default_mod_mask()
         ctrl = mods == Gdk.ModifierType.CONTROL_MASK
         alt = mods == Gdk.ModifierType.ALT_MASK
+        ctrl_shift = mods == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
 
         if keyval == Gdk.KEY_Escape:
             self.hide_launcher()
@@ -295,6 +434,10 @@ class LauncherWindow(Adw.ApplicationWindow):
             self._run_index(_NUMBER_KEYS[keyval] - 1, alt=False)
         elif ctrl and keyval == Gdk.KEY_e:
             self._edit_selected()
+        elif ctrl_shift and keyval in (Gdk.KEY_p, Gdk.KEY_P):
+            self._key_action("pin")
+        elif ctrl and keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
+            self._key_action("delete")
         elif keyval == Gdk.KEY_Tab and not mods:
             self._complete()  # always consume Tab so focus never leaves the search box
         else:
@@ -361,6 +504,16 @@ class LauncherWindow(Adw.ApplicationWindow):
         dark = Adw.StyleManager.get_default().get_dark()
         rgba.parse("#222226" if dark else "#ffffff")
         return rgba
+
+
+def _section_header(row: ResultRow, before: ResultRow | None) -> None:
+    section = row.result.section
+    if not section or (before is not None and before.result.section == section):
+        row.set_header(None)
+        return
+    label = Gtk.Label(label=section, xalign=0)
+    label.add_css_class("section-header")
+    row.set_header(label)
 
 
 def edit_target(result_id: str) -> str | None:

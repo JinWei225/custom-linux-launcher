@@ -94,7 +94,7 @@ Sub-decision if A — where the snippets are stored:
 - **A1.** `snippets.toml` is the master copy. launcherd generates `~/.config/espanso/match/launcher.yml` from it. *(Recommended: our own format, and espanso can be swapped out later.)*
 - A2. espanso's YAML is the master copy, and launcherd reads it directly.
 
-### 🔶 D4 — How direct paste sends the keystroke (needed for M4)
+### ✅ D4 — How direct paste sends the keystroke — **decided: A (Shell extension virtual keyboard)**
 | Option | Pros | Cons |
 |---|---|---|
 | **A. Shell extension virtual keyboard (`Clutter` virtual input device)** | No permissions or prompts; knows exactly when focus returns | Only works while the extension is enabled |
@@ -117,7 +117,7 @@ Sub-decision if A — where the snippets are stored:
 - **B. TOML files plus a libadwaita preferences window** *(chosen: the file stays the single source of truth and can still be edited by hand)*
 - C. Preferences window only (settings stored in GSettings)
 
-### 🔶 D7 — Clipboard history rules (needed for M4)
+### ✅ D7 — Clipboard history rules — **decided: the proposals below** (500 entries, 30 days, 20 MB images, password hints + app excludes, pause, dedupe, no primary selection)
 Choose values for:
 - Maximum entries (proposal: **500**) and maximum age (proposal: **30 days**). Pinned entries are never removed.
 - Maximum image size to store (proposal: **20 MB**). Images are stored as PNG files in `clips/`, with a thumbnail cache.
@@ -194,13 +194,20 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 ### 4.2 Modes
 `launcher --mode {all|apps|files|clipboard|snippets}` opens the window with only those providers, and a matching placeholder text and layout. For example, clipboard mode shows a list on the left and a large text or image preview on the right.
 
-### 4.3 Paste flow (M4, M5)
-1. The shortcut fires. launcherd asks the extension which window has focus (`wm_class`) and remembers it.
-2. You pick an item → launcherd calls `SetClipboard(mime, bytes)` on the extension (the Shell owns the clipboard, so it survives the window hiding) → the window hides.
-3. The extension waits until the remembered window has focus again (timeout 500 ms), then sends:
-   - `Ctrl+Shift+V` if the wm_class is in `terminal_classes` (Ptyxis, gnome-terminal, kitty, Alacritty, WezTerm …)
-   - `Ctrl+V` otherwise.
-4. Optional (config): restore the clipboard to what it was before, for snippet pastes, so snippets don't take over your clipboard.
+### 4.3 Clipboard history and paste (M4, as built)
+- **Launcher Helper extension** (`extension/launcher-helper@jinwei.github.io`, about 200 lines of GJS) exports `io.github.jinwei.LauncherHelper` on GNOME Shell's bus name at `/io/github/jinwei/LauncherHelper`:
+  - `ClipboardChanged(as mimetypes, s wm_class, s app_id)`: from `Meta.Selection::owner-changed`. It carries types and the source app only, never the content.
+  - `GetClipboard(s) -> ay` and `SetClipboard(s, ay)`: through `St.Clipboard`, with bytes passed as `GLib.Bytes` so 20 MB images aren't unpacked in JS.
+  - `GetFocusedWindow() -> (u id, s wm_class, s app_id)` and `Paste(u id, b shift) -> b`: `Paste` waits up to 700 ms for that window to have focus again (activating it if needed), then types Ctrl+V or Ctrl+Shift+V with a Clutter virtual keyboard.
+  - Every method except `GetVersion` refuses callers that don't own `io.github.jinwei.Launcher`, so other apps can't use it to read the clipboard or inject keys.
+- **Recording** (`clipboard_recorder.py`): text wins over images when both are offered (spreadsheets offer both). The recorder skips copies marked as secrets (`x-kde-passwordManagerHint`), copies from apps in `exclude_apps`, anything while paused, text over 1 MB, and images over `max_image_mb`. Thumbnails (64 px icon, 480 px preview) are made with GdkPixbuf in a worker thread. Re-copying moves an entry to the top, and when the launcher itself re-copies an entry, its original source app is kept.
+- **Storage** (`clipboard_store.py`): `~/.local/share/launcher/clipboard.db` plus `clips/<sha256>.{data,icon.png,preview.png}`, all 0700/0600. Old entries are pruned after every addition. Pinned entries never expire.
+- **Window:** clipboard mode (Super+Shift+V) has a scrolling list of up to 200 entries, a 380 px preview pane (wrapped text or the image), and a footer with key hints. Enter pastes into the window the launcher was opened from, Alt+Enter copies only, Ctrl+Shift+P pins, Ctrl+Delete deletes. A status line explains a missing extension or paused recording.
+- **Manual deleting:** a trash button on each clipboard row (visible on hover or selection) or Ctrl+Delete. Launcher Settings → Clipboard edits the limits and the never-record / terminal app lists, shows the entry count, and deletes the last 15 minutes / hour / 24 hours / everything after confirming. Settings asks the running launcher to do the deleting (`clear-clipboard` action with seconds, 0 = all); pinned entries are always kept.
+- **Pinned section:** pinned entries are listed first under a *Pinned* header, the rest under *Recent*. Searches keep the split.
+- **Paste flow:** when the launcher opens, the daemon asks the extension for the focused window (ignoring its own). On Enter it calls `SetClipboard`, hides the window, then calls `Paste(window, shift)` 50 ms later. `shift` is true if the window's class or app id matches `[clipboard] terminal_apps`. If the extension isn't active, the entry is copied through GTK and a notification says to press Ctrl+V.
+- **Pause:** Super+Shift+P (`launcher --clipboard-pause`, or the Pause/Resume command) toggles recording and shows a notification. It isn't persisted, so recording is always back on after a restart.
+- **Testing without logging out:** `tools/nested-shell.sh` runs a private headless GNOME Shell (`--headless --virtual-monitor`) with its own session bus and settings. `make test-extension` runs 13 extension checks there, and `tools/nested-shell.sh .venv/bin/python tools/nested_e2e_test.py [snapshot dir]` runs 12 end-to-end checks with the real daemon and a GTK test app (copy, image, paste back, pause, terminal paste).
 
 ### 4.4 Snippet format (if D3 = A1)
 ```toml
@@ -248,6 +255,9 @@ linux-launcher/
 │   ├── shortcuts.py              # sync launcher-* GNOME custom keybindings, clash detection
 │   ├── accel.py                  # accelerator parsing/normalizing (pure)
 │   ├── config_writer.py          # validated, comment-preserving config edits (tomlkit)
+│   ├── helper.py                 # D-Bus client for the Launcher Helper extension
+│   ├── clipboard_store.py        # clipboard history storage (pure)
+│   ├── clipboard_recorder.py     # ClipboardChanged → store, privacy rules, thumbnails
 │   ├── settings/                 # Launcher Settings app (window, dialogs, debug renderer)
 │   └── providers/
 │       ├── base.py               # Result, Provider and Host protocols
@@ -257,9 +267,10 @@ linux-launcher/
 │       ├── files.py
 │       ├── clipboard.py
 │       └── snippets.py           # + espanso YAML generator
-├── extension/launcher-helper@local/
+├── extension/launcher-helper@jinwei.github.io/
 │   ├── metadata.json             # shell-version: ["50"]
-│   └── extension.js
+│   └── extension.js              # clipboard watch/read/write, focused window, paste
+├── tools/                        # nested headless GNOME Shell harness + e2e tests
 ├── data/
 │   ├── launcher.service          # systemd --user unit
 │   └── io.github.jinwei.Launcher.desktop
@@ -278,7 +289,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M1** ✅ | Apps, quicklinks, web search, aliases, frecency ranking, Ulauncher import | — | Ulauncher can be uninstalled. **Built 2026-09-24:** waiting on your daily-use check |
 | **M2** ✅ | File search over configured folders, open and reveal-in-folder actions | ✅ D5 = A | Finding a new download takes under 1 s after it lands. **Built 2026-09-24:** new files show up in about 0.5 s; Super+Shift+F added early |
 | **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
-| **M4** | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app |
+| **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** | Snippets: launcher search and paste; espanso YAML generation; placeholders | D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher |
 | **M6** | Polish: preferences window (if D6 = B), themes, per-item hotkeys, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
@@ -296,7 +307,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 - **Startup cost:** importing PyGObject takes about 140 ms, so `launcher` never imports it when a daemon is already running. It calls `org.gtk.Actions.Activate` through `gdbus` instead (about 50 ms in total).
 - **Focus loss vs. Shell popups:** GTK's `is-active` follows keyboard focus, which GNOME Shell also takes while its own popups are open (the Super+Space input switcher, Alt+Tab, polkit). Hiding on that closed the launcher whenever you switched input source. The launcher now hides only when the compositor says another window is focused (`Gdk.ToplevelState.FOCUSED`). Tested with a polkit dialog (stays open) and a new window (hides).
 - **Input methods:** while Pinyin or Hangul is composing text, the window leaves Enter, the arrow keys and Esc to the input method. The window tracks this with GtkText `preedit-changed`. Check it by hand with real Pinyin input.
-- **Clipboard watching in GNOME 50:** check whether Mutter now supports `ext-data-control`. If it does, the extension may not be needed for watching (it would still be used for pasting).
+- ~~**Clipboard watching in GNOME 50:**~~ Not needed: the extension watches `Meta.Selection` directly, and was tested in a nested GNOME Shell 50.
 - **espanso on Wayland** needs its uinput and evdev permissions set up. Check `espanso status` before M5.
 - **Image paste** only works if the target app accepts `image/png` from the clipboard. Some Electron apps only accept file URIs. We could also offer `text/uri-list` pointing at the stored PNG.
 
@@ -309,9 +320,9 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | D1 | Language/toolkit | Python + PyGObject (GTK4/libadwaita) | 2026-09-24 | |
 | D2 | UI host | GTK4 window + thin Shell extension | 2026-09-24 | |
 | D3 | Typed expansion | espanso (A), provisional | 2026-09-24 | IBus ruled out (pinyin/hangul in use). Check again in M5 when snippets are set up; option B if espanso still flashes |
-| D4 | Paste keystroke | | | |
+| D4 | Paste keystroke | Shell extension virtual keyboard (A) | 2026-09-24 | Extension only answers the launcher's bus name owner |
 | D5 | File search backend | Own in-memory index + Gio.FileMonitor (A) | 2026-09-24 | |
 | D6 | Config style | TOML + Launcher Settings window (B) | 2026-09-24 | Every GUI edit is validated before it is written; comments preserved (tomlkit) |
-| D7 | Clipboard rules | | | |
+| D7 | Clipboard rules | 500 / 30 days / 20 MB; secret hint + exclude_apps; pause; dedupe; no primary | 2026-09-24 | Pinned entries never expire; list is newest-first |
 | D8 | Shortcuts | Super+Shift + Return / V / P / S / F; main launcher kept on Ctrl+Space | 2026-09-24 | All editable in Launcher Settings with clash checks |
 | D9 | Autostart/packaging | systemd --user service + uv | 2026-09-24 | |

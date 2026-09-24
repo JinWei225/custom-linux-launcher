@@ -20,7 +20,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from .. import launching, paths, shortcuts  # noqa: E402
+from .. import APP_ID, OBJECT_PATH, launching, paths, shortcuts  # noqa: E402
+from ..clipboard_store import read_counts  # noqa: E402
 from ..config import Config, ConfigError  # noqa: E402
 from ..config_writer import ConfigWriter  # noqa: E402
 from ..favicons import domain_of  # noqa: E402
@@ -45,7 +46,7 @@ RELOAD_DELAY_MS = 300
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
         super().__init__(application=app, title="Launcher Settings")
-        self.set_default_size(760, 720)
+        self.set_default_size(860, 720)
         self.writer = ConfigWriter(paths.config_file())
         self.config = Config()
         self._apps: list[AppEntry] | None = None
@@ -71,6 +72,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ShortcutsPage(self),
             AppsPage(self),
             QuicklinksPage(self),
+            ClipboardPage(self),
             FilesPage(self),
         ]
         for page in self._pages:
@@ -287,10 +289,11 @@ class ShortcutsPage(_Page):
     _MODES = {
         "launcher": ("Open the Launcher", "Apps, quicklinks and web search"),
         "files": ("File Search", "Search the folders set on the Files page"),
-        "clipboard": ("Clipboard History", "Coming with clipboard history"),
+        "clipboard": ("Clipboard History", "Paste something you copied earlier"),
+        "clipboard_pause": ("Pause Clipboard Recording", "Toggle; nothing copied is saved"),
         "snippets": ("Snippets", "Coming with snippets"),
     }
-    _AVAILABLE = {"launcher", "files"}
+    _AVAILABLE = {"launcher", "files", "clipboard", "clipboard_pause"}
 
     def __init__(self, window: SettingsWindow) -> None:
         super().__init__(window, "Shortcuts", "preferences-desktop-keyboard-shortcuts-symbolic")
@@ -556,3 +559,166 @@ class FilesPage(_Page):
                 self._save_now(lambda w: w.set_value("files", "folders", current + [shown]))
 
         dialog.select_folder(self.window, None, done)
+
+
+# --- clipboard ----------------------------------------------------------------------
+
+CLEAR_CHOICES = (
+    ("Delete the Last 15 Minutes", 15 * 60),
+    ("Delete the Last Hour", 3600),
+    ("Delete the Last 24 Hours", 86400),
+    ("Delete All History", 0),
+)
+
+
+class ClipboardPage(_Page):
+    key = "clipboard"
+
+    def __init__(self, window: SettingsWindow) -> None:
+        super().__init__(window, "Clipboard", "edit-paste-symbolic")
+        limits = Adw.PreferencesGroup(
+            title="Clipboard History",
+            description="Older entries are deleted automatically; pinned ones never are.",
+        )
+        self._enabled = switch_row(
+            title="Record Clipboard History", subtitle="Needs the Launcher Helper extension"
+        )
+        self._enabled.connect("notify::active", self._on_enabled)
+        limits.add(self._enabled)
+        self._spins = {}
+        for key, title, subtitle, low, high, step in (
+            ("max_entries", "Keep at Most", "Entries (pinned ones don't count)", 10, 10_000, 10),
+            ("max_days", "Delete After", "Days", 1, 3650, 1),
+            ("max_image_mb", "Largest Image", "MB; bigger images aren't recorded", 1, 200, 1),
+        ):
+            spin = Adw.SpinRow.new_with_range(low, high, step)
+            spin.set_title(title)
+            spin.set_subtitle(subtitle)
+            spin.connect("notify::value", self._on_spin, key)
+            limits.add(spin)
+            self._spins[key] = spin
+        self._limits = limits
+
+        self._delete = Adw.PreferencesGroup(
+            title="Delete History", description="Pinned entries are always kept."
+        )
+        self._count_row = action_row(title="Entries")
+        self._count_row.add_css_class("property")
+        self._delete.add(self._count_row)
+        for title, seconds in CLEAR_CHOICES:
+            button = Adw.ButtonRow(title=title)
+            if seconds == 0:
+                button.add_css_class("destructive-action")
+            button.connect("activated", lambda _b, t=title, s=seconds: self._confirm_clear(t, s))
+            self._delete.add(button)
+
+    def refresh(self, config: Config) -> None:
+        self._loading = True
+        self._enabled.set_active(config.clipboard.enabled)
+        for key, spin in self._spins.items():
+            spin.set_value(getattr(config.clipboard, key))
+        self._loading = False
+        self._update_count()
+        excluded = self._app_list_group(
+            "Never Record From",
+            "Password managers and anything else whose copies shouldn't be kept. "
+            "Apps that mark copies as passwords are skipped anyway.",
+            "exclude_apps",
+            config.clipboard.exclude_apps,
+        )
+        terminals = self._app_list_group(
+            "Paste With Ctrl+Shift+V",
+            "Terminals use Ctrl+Shift+V to paste; everything else gets Ctrl+V.",
+            "terminal_apps",
+            config.clipboard.terminal_apps,
+        )
+        self._replace_groups([self._limits, self._delete, excluded, terminals])
+
+    def _on_enabled(self, row: Adw.SwitchRow, _pspec) -> None:
+        value = row.get_active()
+        self._save_now(lambda w: w.set_value("clipboard", "enabled", value))
+
+    def _on_spin(self, row: Adw.SpinRow, _pspec, key: str) -> None:
+        value = int(row.get_value())
+        self._save_later(key, lambda w: w.set_value("clipboard", key, value))
+
+    # --- deleting ------------------------------------------------------------------------
+
+    def _update_count(self) -> None:
+        counts = read_counts(paths.data_dir())
+        if counts is None:
+            self._count_row.set_subtitle("Could not read the history")
+        else:
+            total, pinned = counts
+            self._count_row.set_subtitle(f"{total} saved, {pinned} pinned")
+
+    def _confirm_clear(self, title: str, seconds: int) -> None:
+        span = "everything" if seconds == 0 else title.removeprefix("Delete ").lower()
+        dialog = Adw.AlertDialog(
+            heading=f"{title}?",
+            body=f"Clipboard entries from {span} will be deleted for good. Pinned entries "
+            "are kept.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect(
+            "response", lambda _d, response: response == "delete" and self._clear(seconds)
+        )
+        dialog.present(self.window)
+
+    def _clear(self, seconds: int) -> None:
+        """Ask the running launcher to delete: it owns the history and its open views."""
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        params = GLib.Variant("(sava{sv})", ("clear-clipboard", [GLib.Variant("x", seconds)], {}))
+
+        def done(connection, result) -> None:
+            try:
+                connection.call_finish(result)
+            except GLib.Error:
+                self.window.toast("The launcher isn't running, so nothing was deleted.")
+                return
+            GLib.timeout_add(300, lambda: (self._update_count(), GLib.SOURCE_REMOVE)[1])
+
+        bus.call(
+            APP_ID, OBJECT_PATH, "org.gtk.Actions", "Activate", params, None,
+            Gio.DBusCallFlags.NONE, 5000, None, done,
+        )  # fmt: skip
+
+    # --- app lists -----------------------------------------------------------------------
+
+    def _app_list_group(
+        self, title: str, description: str, key: str, values: tuple[str, ...]
+    ) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup(title=title, description=description)
+        for value in values:
+            app = self.window.app_by_id(value if value.endswith(".desktop") else value + ".desktop")
+            row = action_row(title=app.name if app else value, subtitle=value if app else "")
+            row.add_prefix(app_icon(app))
+            button = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER)
+            button.set_tooltip_text("Remove")
+            button.add_css_class("flat")
+            button.connect(
+                "clicked",
+                lambda _b, v=value: self._save_now(
+                    lambda w: w.set_value("clipboard", key, [x for x in values if x != v])
+                ),
+            )
+            row.add_suffix(button)
+            group.add(row)
+
+        def add(value: str) -> None:
+            value = value.strip().removesuffix(".desktop")
+            current = list(getattr(self.window.config.clipboard, key))
+            if value and value not in current:
+                self._save_now(lambda w: w.set_value("clipboard", key, current + [value]))
+
+        pick = Adw.ButtonRow(title="Add App…", start_icon_name="list-add-symbolic")
+        pick.connect("activated", lambda _r: AppPickerDialog(self.window, add).present())
+        group.add(pick)
+        entry = Adw.EntryRow(title="Or type a window class / app id", show_apply_button=True)
+        entry.connect("apply", lambda e: add(e.get_text()))
+        group.add(entry)
+        return group

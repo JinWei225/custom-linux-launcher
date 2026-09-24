@@ -6,7 +6,9 @@ from launcher.shortcuts import OWNED_PREFIX, _is_owned, _runs_launcher, desired_
 
 def test_desired_bindings_cover_modes_apps_and_links():
     config = Config(
-        shortcuts=ShortcutsConfig(launcher="<Control>space", files="<Super><Shift>f"),
+        shortcuts=ShortcutsConfig(
+            launcher="<Control>space", files="<Super><Shift>f", clipboard="", clipboard_pause=""
+        ),
         apps={
             "code.desktop": AppSettings("code", "<Super><Shift>c"),
             "x.desktop": AppSettings("x"),

@@ -63,10 +63,7 @@ class ConfigWriter:
     def set_value(self, section: str, key: str, value: Any) -> Config:
         def change(doc: tomlkit.TOMLDocument) -> None:
             table = _table(doc, section)
-            if isinstance(value, (list, tuple)):
-                table[key] = _array(value)
-            else:
-                table[key] = value
+            _put(table, key, _array(value) if isinstance(value, (list, tuple)) else value)
 
         return self.edit(change)
 
@@ -106,7 +103,7 @@ class ConfigWriter:
             for f in fields(QuickLink):
                 value = getattr(link, f.name)
                 if f.name in ("name", "url"):
-                    table[f.name] = value
+                    _put(table, f.name, value)
                 else:
                     _set_or_drop(table, f.name, value)
 
@@ -163,6 +160,24 @@ def _set_or_drop(table: Table, key: str, value: Any) -> None:
         if key in table:
             del table[key]
     else:
+        _put(table, key, value)
+
+
+def _put(table: Table, key: str, value: Any) -> None:
+    """Set a key; a new key goes right after the table's last key, not after the
+    comments and blank lines that trail it (those usually introduce the next section)."""
+    if key in table:
+        table[key] = value
+        return
+    last_key = None
+    for existing, _item in table.value.body:
+        if existing is not None:
+            last_key = existing
+    try:
+        if last_key is None:
+            raise AttributeError
+        table.value._insert_after(last_key, key, tomlkit.item(value))  # noqa: SLF001
+    except (AttributeError, KeyError, TypeError):  # private API changed: plain append
         table[key] = value
 
 

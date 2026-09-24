@@ -8,6 +8,7 @@ launcher --daemon           start in the background (used by the systemd unit)
 launcher --import-ulauncher print Ulauncher shortcuts as [[quicklink]] TOML
 launcher --run app:ID       launch an app / quicklink (what hotkeys run)
 launcher --settings [--edit app:ID|quicklink:NAME]   open Launcher Settings
+launcher --clipboard-pause  pause / resume clipboard recording
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     group.add_argument("--daemon", action="store_true", help="start hidden in the background")
     group.add_argument("--run", metavar="ITEM", help="run app:<desktop id> or quicklink:<name>")
     group.add_argument("--settings", action="store_true", help="open Launcher Settings")
+    group.add_argument(
+        "--clipboard-pause", action="store_true", help="pause / resume clipboard recording"
+    )
     parser.add_argument("--edit", metavar="ITEM", help="with --settings: open this item")
     parser.add_argument("--debug-snapshots", metavar="DIR", help=argparse.SUPPRESS)
     group.add_argument(
@@ -48,6 +52,8 @@ def requested_action(args: argparse.Namespace) -> tuple[str, str | None]:
             return name, None
     if args.run:
         return "run", args.run
+    if args.clipboard_pause:
+        return "toggle-clipboard-pause", None
     return ("show" if args.show else "toggle"), args.mode
 
 
@@ -80,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         if status is SendStatus.TIMEOUT:
             print("launcher: the running instance is not responding", file=sys.stderr)
             return 1
-        if action in ("hide", "reload", "quit"):
+        if action in ("hide", "reload", "quit", "toggle-clipboard-pause"):
             return 0  # nothing is running, so there is nothing to do
 
     # No daemon is running (or we are the daemon): become the primary instance.
