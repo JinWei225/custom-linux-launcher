@@ -1,0 +1,32 @@
+/* Launcher styling on top of libadwaita. ROW_HEIGHT in window.py must match
+   .results row: min-height 40 + padding 2*6 + margin 2*2 = 56. */
+
+.launcher-entry {
+  margin: 12px;
+  min-height: 44px;
+}
+
+.launcher-entry > text {
+  font-size: 1.3em;
+}
+
+.results {
+  background: transparent;
+  margin: 0 8px 8px 8px;
+}
+
+.results row {
+  min-height: 40px;
+  padding: 6px 10px;
+  margin: 2px 0;
+  border-radius: 8px;
+}
+
+.result-title {
+  font-weight: 600;
+}
+
+.problem-banner {
+  padding: 8px 12px;
+  background-color: alpha(@warning_color, 0.18);
+}

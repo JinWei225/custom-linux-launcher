@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Launcher
+Comment=Launch apps, links, files, clipboard history and snippets
+Exec=launcher
+Icon=system-search
+Terminal=false
+StartupNotify=true
+# Hidden from app grids and from the launcher's own app list; GNOME still uses it to
+# identify the window and its notifications.
+NoDisplay=true

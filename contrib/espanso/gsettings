@@ -1,0 +1,13 @@
+#!/bin/sh
+# gsettings wrapper used only by espanso (see contrib/espanso/README.md).
+#
+# espanso decides the "keyboard layout" from the first entry of GNOME's input-source
+# list. That list is most-recently-used first, so switching between us / pinyin / hangul
+# looks like a layout change: espanso restarts its worker, which flashes a focus-stealing
+# window. All our sources type on the US layout, so report a stable answer.
+if [ "$1" = "get" ] && [ "$2" = "org.gnome.desktop.input-sources" ]; then
+    [ -n "$LAUNCHER_SHIM_LOG" ] && echo "$(date +%T) intercepted: $*" >> "$LAUNCHER_SHIM_LOG"
+    echo "[('xkb', 'us')]"
+    exit 0
+fi
+exec /usr/bin/gsettings "$@"
