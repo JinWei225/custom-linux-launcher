@@ -46,6 +46,7 @@ log = logging.getLogger(__name__)
 MAX_TEXT_WIDTH = 820  # the text column; wider windows get side margins
 MIN_MARGIN = 32
 LIST_STEP = 28  # px per list level; the bullet or checkbox sits in the step before the text
+NUMBER_GAP = 6  # between a list number (drawn right-aligned) and its text
 QUOTE_STEP = 18
 CODE_INSET = 14
 CHECKBOX = 15
@@ -107,6 +108,8 @@ class MarkdownEditor(Gtk.TextView):
         self._preedit = False
         self._checkboxes: dict[int, Graphene.Rect] = {}  # line -> drawn box (buffer coords)
         self._bullets: dict[int, float] = {}  # line -> baseline the bullet was drawn on
+        self._numbers: dict[int, tuple[str, float, float]] = {}  # line -> label, right x, baseline
+        self._levels: list[int] = []  # per line: numbered lists it is nested in (1. / a) / i.)
         # Set by the window for the open note: where its pictures are, what to call new
         # ones, and what to do with Ctrl+clicked links and errors.
         self.base_dir: Path | None = None
@@ -189,7 +192,6 @@ class MarkdownEditor(Gtk.TextView):
         self.t_code = tag("md-code", family="monospace", scale=0.92)
         self.t_fence = tag("md-fence", family="monospace", scale=0.85)
         self.t_done = tag("md-done", strikethrough=True)
-        self.t_number = tag("md-number", weight=Pango.Weight.BOLD)
         self.t_inline = {
             "bold": tag("md-bold", weight=Pango.Weight.BOLD),
             "italic": tag("md-italic", style=Pango.Style.ITALIC),
@@ -264,7 +266,7 @@ class MarkdownEditor(Gtk.TextView):
     def load_text(self, text: str) -> None:
         """Show a note's text as it is (no renumbering, no rewrites), not undoable."""
         self._loading = True
-        self._lines, self._infos = [], []
+        self._lines, self._infos, self._levels = [], [], []
         self.buffer.begin_irreversible_action()
         self.buffer.set_text(text)
         self.buffer.end_irreversible_action()
@@ -351,6 +353,7 @@ class MarkdownEditor(Gtk.TextView):
             end_new -= 1
             end_old -= 1
         self._lines, self._infos = lines, infos
+        self._levels = md.ordered_levels(infos)
         self._cursor_line = self._cursor().get_line()
         if end_new >= start:
             for line in range(start, end_new + 1):
@@ -393,8 +396,6 @@ class MarkdownEditor(Gtk.TextView):
             span(self.t_list[info.depth], 0)
             if info.hidden:
                 span(self.t_hidden, 0, info.hidden)
-            if kind == "ordered":
-                span(self.t_number, info.hidden, info.marker - 1)
             if kind == "task" and info.checked:
                 span(self.t_done, info.content, len(self._lines[line]))
         elif kind == "quote":
@@ -462,7 +463,7 @@ class MarkdownEditor(Gtk.TextView):
         info = self._infos[line]
         if not info.hidden or cursor.get_line_offset() >= info.hidden:
             return
-        target = info.hidden if info.kind == "ordered" else info.content
+        target = info.content
         it = self._line_start(line)
         it.set_line_offset(min(target, it.get_chars_in_line()))
         self._editing = True
@@ -490,10 +491,13 @@ class MarkdownEditor(Gtk.TextView):
             self.buffer.place_cursor(it)
 
     def _apply_shorthand(self) -> None:
-        """ "[] " just typed at a line start becomes "- [ ] "."""
+        """ "[] " just typed at a line start becomes "- [ ] "; "a) " or "i. " on an
+        indented line becomes a numbered sub-list ("1.", shown as a) or i.); "- " typed
+        on an empty numbered item makes it a bullet, and "1. " the other way round."""
         cursor = self._cursor()
         line, col = cursor.get_line(), cursor.get_line_offset()
-        found = md.task_shorthand(self.line_text(line))
+        text = self.line_text(line)
+        found = md.retype_shorthand(text) or md.task_shorthand(text) or md.sublist_shorthand(text)
         if found is None or col != found[0]:
             return
         length, replacement = found
@@ -562,7 +566,7 @@ class MarkdownEditor(Gtk.TextView):
         if keyval in _ENTER and not mods:
             return self._enter()
         if keyval == Gdk.KEY_Tab and not mods:
-            return self._indent_lines(md.indent)
+            return self._indent_lines(md.indent_item)
         if keyval == Gdk.KEY_ISO_Left_Tab or (keyval == Gdk.KEY_Tab and shift):
             self._indent_lines(md.outdent)
             return True  # never move focus out of the editor
@@ -585,9 +589,10 @@ class MarkdownEditor(Gtk.TextView):
         line, col, text, info = here
         if info.kind in (*md.LIST_KINDS, "quote") and col >= info.content:
             if md.is_empty_item(text, info):
-                # Enter on an empty item: step out one level, or end the list.
+                # Enter on an empty item: step out one level (as an item of the list it
+                # steps back into: a bullet under "1." becomes "2."), or end the list.
                 if info.kind in md.LIST_KINDS and info.indent:
-                    new = md.outdent(text)
+                    new = md.step_out(self._lines, self._infos, line)
                     self._user_edit(lambda: self._set_line(line, new, len(new)))
                 else:
                     self._user_edit(lambda: self._set_line(line, "", 0))
@@ -642,8 +647,7 @@ class MarkdownEditor(Gtk.TextView):
         if self.buffer.get_has_selection() or (here := self._current()) is None:
             return False
         line, col, _text, info = here
-        start = info.hidden if info.kind == "ordered" else info.content
-        if not info.hidden or col != start:
+        if not info.hidden or col != info.content:
             return False
         it = self._line_start(line)
         if line > 0:
@@ -882,6 +886,7 @@ class MarkdownEditor(Gtk.TextView):
         width = self.get_width()
         self._checkboxes = {}
         self._bullets = {}
+        self._numbers = {}
 
         self._draw_code_blocks(snapshot, top, bottom, width, faint)
         it, _ = self.get_line_at_y(top)
@@ -896,6 +901,13 @@ class MarkdownEditor(Gtk.TextView):
                 baseline = y + self._baseline(line, info)
                 self._bullets[line] = baseline
                 self._glyph_on_baseline(snapshot, glyph, self._slot_x(info.depth), baseline, fg)
+            elif info.kind == "ordered":
+                level = self._levels[line] if line < len(self._levels) else 0
+                label = md.list_label(info.number, level, info.delim)
+                baseline = y + self._baseline(line, info)
+                right = self._margin + (info.depth + 1) * LIST_STEP - NUMBER_GAP
+                self._numbers[line] = (label, right, baseline)
+                self._label_on_baseline(snapshot, label, right, baseline, fg)
             elif info.kind == "task":
                 self._checkbox(snapshot, line, info, y, dim, accent)
             elif info.kind == "quote":
@@ -944,6 +956,17 @@ class MarkdownEditor(Gtk.TextView):
         top = baseline - layout.get_baseline() / Pango.SCALE
         snapshot.save()
         snapshot.translate(Graphene.Point().init(cx - logical.width / 2, top))
+        snapshot.append_layout(layout, color)
+        snapshot.restore()
+
+    def _label_on_baseline(self, snapshot, text: str, right: float, baseline: float, color):
+        """A list number ending at `right`, on the text's baseline (long ones like "xviii."
+        reach into the margin, as in Notion)."""
+        layout = self.create_pango_layout(text)
+        _ink, logical = layout.get_pixel_extents()
+        top = baseline - layout.get_baseline() / Pango.SCALE
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(right - logical.width, top))
         snapshot.append_layout(layout, color)
         snapshot.restore()
 

@@ -19,6 +19,7 @@ NOTE = (
     "# Lecture 3: Fourier Series\n\n"
     "Periodic signals as **sums** of *sinusoids*.\n\n"
     "## Key ideas\n- Orthogonality\n\t- sin and cos\n1. Find the period\n10. Compute aₙ\n"
+    "\t1. nested step\n\t\t1. deeper step\n"
     "- [x] Read chapter 3\n- [ ] Problem set 2\n\n"
     "> Any periodic function\n\n"
     "See [the lecture page](https://example.edu/signals), https://gnome.org and "
@@ -70,7 +71,7 @@ def exported(tmp_path):
 @needs_poppler
 def test_text_reads_like_the_note(exported):
     out, pages = exported
-    assert pages == 1
+    assert re.search(rf"Pages:\s+{pages}\b", pdf_info(out))
     text = pdf_text(out)
     for shown in (
         "Lecture 3: Fourier Series",
@@ -79,6 +80,8 @@ def test_text_reads_like_the_note(exported):
         "sin and cos",
         "1. Find the period",
         "10. Compute aₙ",
+        "a) nested step",
+        "i. deeper step",
         "Read chapter 3",
         "Problem set 2",
         "Any periodic function",

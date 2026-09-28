@@ -210,6 +210,69 @@ def main() -> int:
     pump(0.05)
     check("deleting an item renumbers", t.text() == "1. a\n2. c", repr(t.text()))
 
+    # Numbered sub-lists, like Notion: 1. / a) / i. by level; the file keeps "1.".
+    def labels() -> dict[int, str]:
+        window.editor.queue_draw()
+        pump(0.15)
+        return {n: label for n, (label, _x, _y) in window.editor._numbers.items()}
+
+    t.clear()
+    t.type("1. first\n\tsub one\nsub two\n\tdeeper\n\n\nsecond")
+    expected = "1. first\n\t1. sub one\n\t2. sub two\n\t\t1. deeper\n2. second"
+    check("Tab starts a sub-list; Enter twice steps back out", t.text() == expected,
+          repr(t.text()))  # fmt: skip
+    check("levels show as 1. / a) / i.",
+          labels() == {0: "1.", 1: "a)", 2: "b)", 3: "i.", 4: "2."}, repr(labels()))  # fmt: skip
+    check("the number is hidden text, drawn in the margin",
+          "md-hidden" in t.tags(1, 2) and "md-hidden" not in t.tags(1, 4))  # fmt: skip
+    t.go(1, 4)
+    t.key(Gdk.KEY_Home)
+    check("Home goes to the text, not into the number", t.cursor().get_line_offset() == 4)
+    t.clear()
+    t.type("1. a\nb\nc")
+    t.go(1, 4)
+    t.key(Gdk.KEY_Tab)
+    check("Tab on an item renumbers the rest", t.text() == "1. a\n\t1. b\n2. c", repr(t.text()))
+    t.clear()
+    t.type("1. top\n\ta) typed")
+    check("typing a) on the new sub-item keeps it numbered",
+          t.text() == "1. top\n\t1. typed" and labels().get(1) == "a)", repr(t.text()))  # fmt: skip
+    t.clear()
+    t.type("1. top\n")
+    t.key(Gdk.KEY_BackSpace)  # a plain line under the list
+    t.type("\ta) typed")
+    check("typing a) on an indented line starts a sub-list",
+          t.text() == "1. top\n\t1. typed" and labels().get(1) == "a)", repr(t.text()))  # fmt: skip
+
+    # Mixed: a bullet under a numbered item, then back to the next number.
+    t.clear()
+    t.type("1. first\n\t- bullet\n\nsecond")
+    check("- on an empty sub-item makes it a bullet, Enter twice goes back to 2.",
+          t.text() == "1. first\n\t- bullet\n2. second", repr(t.text()))  # fmt: skip
+    check("…numbered 1., 2. around the bullet", labels() == {0: "1.", 2: "2."}, repr(labels()))
+    t.clear()
+    t.type("- bullet\n\t1. numbered")
+    check("a numbered list inside a bullet starts at 1.", labels() == {1: "1."}, repr(labels()))
+
+    # A long numbered item wraps under its text, not under the number.
+    t.clear()
+    t.type("1. " + "wrapping words " * 30)
+    pump(0.2)
+    first = window.editor.get_iter_location(window.buffer.get_iter_at_line_offset(0, 3)[1])
+    wrapped = None
+    it = window.buffer.get_iter_at_line_offset(0, 3)[1]
+    while not it.ends_line():
+        rect = window.editor.get_iter_location(it)
+        if rect.y > first.y + 5:
+            wrapped = rect
+            break
+        it.forward_char()
+    label, right, _baseline = window.editor._numbers[0]
+    check("a long item wraps", wrapped is not None)
+    check("…and its next row starts where the text does, right of the number",
+          wrapped is not None and abs(wrapped.x - first.x) <= 2 and right < first.x,
+          f"text {first.x}, wrapped row {wrapped and wrapped.x}, number ends {right}")  # fmt: skip
+
     # Checkboxes: shorthand, Ctrl+Enter, click.
     t.clear()
     t.type("[] buy milk")

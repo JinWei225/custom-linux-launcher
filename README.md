@@ -56,9 +56,9 @@ in sync). Placeholders: `{date:%d %B %Y}`, `{clipboard}` and `{cursor}`.
 <img src="docs/screenshots/launcher-snippets.png" width="80%" alt="Snippets with a preview">
 
 ### Notes
-A notes app for taking notes in class: `- ` becomes a bullet, `## ` a heading, `[] ` a
-checkbox, `**bold**` turns bold, and the markdown symbols hide once you move to another
-line. Each note is a plain `.md` file in `~/Notes`, with folders as notebooks, pinned and
+A notes app for taking notes in class: `- ` becomes a bullet, `1. ` a numbered list (Tab
+nests it as a), then i.; bullets and numbers mix), `## ` a heading, `[] ` a checkbox,
+`**bold**` turns bold, and the markdown symbols hide once you move to another line. Each note is a plain `.md` file in `~/Notes`, with folders as notebooks, pinned and
 recent notes in a sidebar you can hide (F9), an outline of the headings, pasted
 screenshots, export to PDF, and autosave (a second after you stop typing, and whenever
 you switch to another window). Notes also show up in the launcher's search. It starts

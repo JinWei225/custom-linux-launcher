@@ -77,7 +77,7 @@ def test_marker_positions():
     t = one("- [x] done")
     assert (t.hidden, t.content, t.checked) == (6, 6, True)
     o = one("\t3. third")
-    assert (o.hidden, o.marker, o.content, o.number, o.delim) == (1, 4, 4, 3, ".")
+    assert (o.hidden, o.marker, o.content, o.number, o.delim) == (4, 4, 4, 3, ".")
     q = one(">> deep")
     assert (q.depth, q.hidden, q.content) == (2, 3, 3)
     r = one("---")
@@ -351,3 +351,101 @@ def test_styled_text():
     text, styles = styled_text("- item *it*", start=2)
     assert (text, [(s.kind, s.start, s.end) for s in styles]) == ("item it", [("italic", 5, 7)])
     assert styled_text("****") == ("****", [])
+
+
+# --- numbered sub-lists ----------------------------------------------------------------
+
+from launcher.notes_markdown import (  # noqa: E402
+    list_label,
+    ordered_levels,
+    step_out,
+    sublist_shorthand,
+)
+
+
+@pytest.mark.parametrize(
+    "number, level, delim, label",
+    [
+        (1, 0, ".", "1."),
+        (12, 0, ")", "12)"),
+        (1, 1, ".", "a)"),
+        (3, 1, ".", "c)"),
+        (26, 1, ".", "z)"),
+        (27, 1, ".", "aa)"),
+        (1, 2, ".", "i."),
+        (4, 2, ".", "iv."),
+        (9, 2, ".", "ix."),
+        (14, 2, ".", "xiv."),
+        (2, 3, ".", "2."),  # then again
+    ],
+)
+def test_list_label(number, level, delim, label):
+    assert list_label(number, level, delim) == label
+
+
+def test_ordered_levels_count_numbered_lists_only():
+    lines = [
+        "1. top",  # 0
+        "\t1. sub",  # 1
+        "\t\t1. subsub",  # 2
+        "\t\t\t1. again",  # 3 -> shown as 1. again
+        "\t- bullet",  # bullets don't count
+        "\t\t1. under it",  # 1: inside one numbered list
+        "",  # blank lines don't end a list
+        "2. top",  # 0
+        "text",  # a paragraph ends it
+        "\t1. alone",  # 0
+    ]
+    levels = ordered_levels(classify(lines))
+    assert [levels[i] for i in (0, 1, 2, 3, 5, 7, 9)] == [0, 1, 2, 3, 1, 0, 0]
+    labels = [list_label(1, levels[i]) for i in (0, 1, 2, 3)]
+    assert labels == ["1.", "a)", "i.", "1."]
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("\ta) ", (4, "\t1. ")),
+        ("\ti. x", (4, "\t1. ")),
+        ("    a. ", (7, "    1. ")),
+        ("a) ", None),  # not indented: prose like "a) first point" stays text
+        ("\ta)", None),  # not until the space
+        ("\tb) ", None),
+        ("\t1. x", None),
+    ],
+)
+def test_sublist_shorthand(line, expected):
+    assert sublist_shorthand(line) == expected
+
+
+def test_step_out_joins_the_list_above():
+    lines = ["1. first", "\t- bullet", "\t- "]
+    assert step_out(lines, classify(lines), 2) == "2. "
+    lines = ["3) first", "\t1. sub", "\t\t- deep", "\t\t- "]
+    assert step_out(lines, classify(lines), 3) == "\t2. "
+    lines = ["- [x] task", "", "\t1. sub", "\t2. "]
+    assert step_out(lines, classify(lines), 3) == "- [ ] "
+    lines = ["- a", "\t\t- "]  # one level in, however far it is indented
+    assert step_out(lines, classify(lines), 1) == "- "
+    lines = ["text", "\t- "]  # no list to step into: just outdent
+    assert step_out(lines, classify(lines), 1) == "- "
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("2. - ", (5, "- ")),
+        ("\t1. * ", (6, "\t* ")),
+        ("- 1. ", (5, "1. ")),
+        ("\t- 3) ", (6, "\t1. ")),
+        ("2. - x", None),  # only right after the marker is typed on an empty item
+        ("2. -", None),
+        ("- - ", (4, "- ")),
+        ("\t1. a) ", (7, "\t1. ")),  # already numbered (shown as a)): stays numbered
+        ("\t- i. ", (6, "\t1. ")),
+    ],
+)
+def test_retype_shorthand(line, expected):
+    from launcher.notes_markdown import retype_shorthand
+
+    assert retype_shorthand(line) == expected

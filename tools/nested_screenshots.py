@@ -93,8 +93,12 @@ Periodic signals as sums of sinusoids.
 
 ## Steps
 1. Find the period *T*
-2. Compute a₀
-3. Compute aₙ and bₙ
+2. LONG_STEP
+	1. a₀, the average value
+	2. aₙ and bₙ
+		1. use symmetry to skip one
+	- tip: sketch the signal first
+3. Write out the series
 
 - [x] Read chapter 3
 - [ ] Problem set 2
@@ -107,6 +111,11 @@ Periodic signals as sums of sinusoids.
 x = np.fft.fft(signal)
 ```
 """
+LONG_STEP = (  # long enough to wrap, to show it lines up under its text
+    "Compute the coefficients by integrating the signal times each basis function over "
+    "one full period, then dividing by the length of the period"
+)
+LECTURE = LECTURE.replace("LONG_STEP", LONG_STEP)
 NOTE_FILES = {
     "Signals & Systems/Lecture 3 – Fourier Series.md": LECTURE,
     "Signals & Systems/Lecture 2 – LTI Systems.md": "# Lecture 2: LTI Systems\n\n- Convolution\n",
