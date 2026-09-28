@@ -18,6 +18,7 @@ MODES: dict[str, tuple[str, ...]] = {
         "apps",
         "quicklinks",
         "snippet-search",
+        "notes",
         "commands",
         "dates",
         "timezones",

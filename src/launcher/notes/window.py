@@ -400,6 +400,7 @@ class NotesWindow(Adw.ApplicationWindow):
         Called whenever the open note is opened, renamed or moved."""
         self._outline_button.set_sensitive(self.session is not None)
         if self.session is None:
+            self.set_title("Notes")
             self._title.set_title("Notes")
             self._title.set_subtitle("")
             self.editor.base_dir = None
@@ -408,6 +409,7 @@ class NotesWindow(Adw.ApplicationWindow):
         self.editor.base_dir = path.parent
         self.editor.note_stem = path.stem
         self._title.set_title(self.session.title)
+        self.set_title(f"{self.session.title} – Notes")  # Alt+Tab and the overview
         folder = str(Path(self.session.rel).parent)
         self._title.set_subtitle("" if folder == "." else folder)
 

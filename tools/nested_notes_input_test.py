@@ -65,7 +65,7 @@ class Input:
         self.window = window
         self.editor = window.editor
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION)
-        frame = self._call("WindowFrame", GLib.Variant("(s)", ("Notes",)))[0]
+        frame = self._call("WindowFrame", GLib.Variant("(s)", (window.get_title(),)))[0]
         self.origin = frame[0], frame[1]
 
     def _call(self, method: str, args: GLib.Variant):

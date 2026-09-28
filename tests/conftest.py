@@ -37,6 +37,9 @@ class FakeHost:
     def open_settings(self, edit=None):
         self.calls.append(("settings", edit))
 
+    def open_note(self, path):
+        self.calls.append(("note", path))
+
     paused = False
 
     def paste_clip(self, clip_id):

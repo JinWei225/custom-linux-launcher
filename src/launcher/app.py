@@ -44,6 +44,7 @@ from .providers.commands import CommandsProvider  # noqa: E402
 from .providers.currency import CurrencyProvider  # noqa: E402
 from .providers.dates import DatesProvider  # noqa: E402
 from .providers.files import FilesProvider  # noqa: E402
+from .providers.notes import NotesProvider  # noqa: E402
 from .providers.quicklinks import (  # noqa: E402
     QuickLinksProvider,
     WebSearchProvider,
@@ -140,6 +141,7 @@ class LauncherApp(Adw.Application):
                 "clipboard": ClipboardProvider(self, self._clips, app_name=_app_name),
                 "snippets": SnippetsProvider(self, browse=True),
                 "snippet-search": SnippetsProvider(self, browse=False),
+                "notes": NotesProvider(self),
             },
             usage=self._usage,
         )
@@ -311,6 +313,11 @@ class LauncherApp(Adw.Application):
             argv += ["--edit", edit]
         token = self._launch_context().get_startup_notify_id(None, []) or None
         launching.spawn(argv, APP_ID + ".Settings", token)
+
+    def open_note(self, path: str) -> None:
+        argv = [sys.executable, "-m", "launcher", "--notes", "--open", path]
+        token = self._launch_context().get_startup_notify_id(None, []) or None
+        launching.spawn(argv, APP_ID + ".Notes", token)
 
     def run_item(self, item_id: str) -> None:
         """What a per-item hotkey runs: `launcher --run app:<id>` / `quicklink:<name>`."""

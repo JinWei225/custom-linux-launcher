@@ -32,6 +32,7 @@ SNIPPETS = CONFIG.with_name("snippets.toml")
 ESPANSO = Path(os.environ["XDG_CONFIG_HOME"]) / "espanso" / "match" / "launcher.yml"
 RATES = Path(os.environ["XDG_CACHE_HOME"]) / "launcher" / "rates.json"
 TEST_APP_ID = "io.github.jinwei.LauncherNestedTest"
+NOTES = Path(os.environ["XDG_DATA_HOME"]) / "Notes"
 
 results: list[tuple[str, bool]] = []
 rates_written = 0.0  # "fetched" time of the rates.json seeded before the daemon starts
@@ -54,6 +55,17 @@ def action(name: str, param: str | None = None) -> None:
          "org.gtk.Actions.Activate", f"'{name}'", value, "@a{sv} {}"],
         check=False, capture_output=True, timeout=10,
     )  # fmt: skip
+
+
+def window_open(title: str) -> bool:
+    """Whether the nested shell has a window with this title (nested-input extension)."""
+    out = subprocess.run(
+        ["gdbus", "call", "--session", "--dest", "org.gnome.Shell",
+         "--object-path", "/io/github/jinwei/NestedInput", "--method",
+         "io.github.jinwei.NestedInput.WindowFrame", title],
+        check=False, capture_output=True, text=True, timeout=10,
+    ).stdout  # fmt: skip
+    return bool(out) and not out.startswith("([-1,")
 
 
 def clips() -> list[dict]:
@@ -364,6 +376,24 @@ def run(daemon_log: str) -> int:
         left == {"first entry from the app", "<image>"},
         f"{before} -> {sorted(left)}",
     )
+
+    # 7. Notes are found by title; Enter opens the note in Notes (last: it takes focus).
+    NOTES.mkdir(parents=True, exist_ok=True)
+    (NOTES / "Lecture 3.md").write_text("# Lecture 3: Fourier **Series**\n\nnotes\n")
+    CONFIG.write_text(CONFIG.read_text().replace('folder = "~/Notes"', f'folder = "{NOTES}"', 1))
+    time.sleep(1.0)  # the daemon reloads its config
+    launcher("--show", "--mode", "all")
+    time.sleep(0.8)
+    action("debug-set-query", "fourier")
+    time.sleep(0.4)
+    if SNAPSHOTS:
+        action("debug-snapshot", str(SNAPSHOTS / "notes-search.png"))
+        time.sleep(0.2)
+    action("debug-run-selected")
+    opened = wait_for(lambda: window_open("Lecture 3: Fourier Series – Notes"), seconds=10)
+    check("Enter on a note opens it in Notes", opened)
+    subprocess.run(["pkill", "-f", "--", f"--open {NOTES}"], check=False)
+    time.sleep(0.5)
 
     app.proc.terminate()
     log_text = Path(daemon_log).read_text()

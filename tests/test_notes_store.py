@@ -59,6 +59,9 @@ def write(store, rel, text):
         ("#hashtag", "#hashtag"),
         ("# ", "Untitled"),
         ("x" * 200, "x" * 80),
+        ("## Week 2 **labs**", "Week 2 labs"),  # as it reads, without inline markers
+        ("[Course page](https://a.b) notes", "Course page notes"),
+        ("2 * 3 * 4", "2 * 3 * 4"),
     ],
 )
 def test_title_of(text, title):

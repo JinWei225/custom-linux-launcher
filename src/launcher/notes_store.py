@@ -21,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .notes_markdown import ATTACHMENTS, attachment_links
+from .notes_markdown import ATTACHMENTS, attachment_links, plain_text
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +56,13 @@ class Folder:
 
 
 def title_of(text: str) -> str:
-    """ "# Lecture 3\\n..." -> "Lecture 3"; empty -> "Untitled"."""
+    """ "# Lecture **3**\\n..." -> "Lecture 3" (as it reads); empty -> "Untitled"."""
     for line in text.splitlines():
         line = line.strip()
         if line:
             line = re.sub(r"^#{1,6}(?:\s+|$)", "", line).strip()  # "# " mid-typing too
             line = re.sub(r"^(?:[-*+]|\d+\.)\s+(?:\[[ xX]?\]\s+)?", "", line).strip()
+            line = plain_text(line).strip()
             return line[:MAX_NAME].strip() or UNTITLED
     return UNTITLED
 
@@ -81,6 +82,8 @@ class NotesStore:
     def __init__(self, root: Path, trash: Callable[[Path], None] | None = None) -> None:
         self.root = root
         self._trash = trash or _delete_for_good
+        # path -> (mtime_ns, size, title): a rescan only reads notes that changed.
+        self._titles: dict[str, tuple[int, int, str]] = {}
 
     def path(self, rel: str) -> Path:
         path = (self.root / rel).resolve()
@@ -120,9 +123,15 @@ class NotesStore:
         return folder
 
     def _note(self, rel: str, path: Path) -> Note:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            head = f.read(4096)
-        return Note(rel, title_of(head), path.stat().st_mtime)
+        st = path.stat()
+        cached = self._titles.get(str(path))
+        if cached is not None and cached[:2] == (st.st_mtime_ns, st.st_size):
+            title = cached[2]
+        else:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                title = title_of(f.read(4096))
+            self._titles[str(path)] = (st.st_mtime_ns, st.st_size, title)
+        return Note(rel, title, st.st_mtime)
 
     def note(self, rel: str) -> Note:
         path = self.path(rel)
