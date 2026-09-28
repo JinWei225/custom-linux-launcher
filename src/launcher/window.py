@@ -129,6 +129,25 @@ class LauncherWindow(Adw.ApplicationWindow):
         problem_box.append(open_config)
         self._banner = Gtk.Revealer(child=problem_box)
 
+        # Setup problems (from the setup check): open Settings → Status, or dismiss them.
+        self._setup_label = Gtk.Label(
+            xalign=0, hexpand=True, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+            max_width_chars=1,
+        )  # fmt: skip
+        status = Gtk.Button(label="Status", valign=Gtk.Align.CENTER)
+        status.connect("clicked", lambda _b: app.activate_action("show-status", None))
+        dismiss = Gtk.Button(
+            icon_name="window-close-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Dismiss"
+        )
+        dismiss.add_css_class("flat")
+        dismiss.connect("clicked", lambda _b: app.activate_action("dismiss-setup-problems", None))
+        setup_box = Gtk.Box(spacing=6)
+        setup_box.add_css_class("problem-banner")
+        setup_box.append(self._setup_label)
+        setup_box.append(status)
+        setup_box.append(dismiss)
+        self._setup_banner = Gtk.Revealer(child=setup_box)
+
         self._entry = Gtk.SearchEntry(hexpand=True)
         self._entry.add_css_class("launcher-entry")
         self._entry.connect("changed", lambda _e: self._refresh())
@@ -195,6 +214,7 @@ class LauncherWindow(Adw.ApplicationWindow):
 
         self._content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._content.append(self._banner)
+        self._content.append(self._setup_banner)
         self._content.append(self._entry)
         self._content.append(self._status)
         self._content.append(body)
@@ -286,6 +306,10 @@ class LauncherWindow(Adw.ApplicationWindow):
     def set_problems(self, problems: list[str]) -> None:
         self._problem_label.set_text("Config: " + "; ".join(problems) if problems else "")
         self._banner.set_reveal_child(bool(problems))
+
+    def set_setup_problems(self, text: str) -> None:
+        self._setup_label.set_text(text)
+        self._setup_banner.set_reveal_child(bool(text))
 
     def save_snapshot(self, path: str) -> None:
         """Debug helper: render the window to a PNG (GNOME blocks normal screenshots)."""

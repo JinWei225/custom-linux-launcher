@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -34,6 +35,8 @@ ESPANSO = Path(os.environ["XDG_CONFIG_HOME"]) / "espanso" / "match" / "launcher.
 RATES = Path(os.environ["XDG_CACHE_HOME"]) / "launcher" / "rates.json"
 TEST_APP_ID = "io.github.jinwei.LauncherNestedTest"
 NOTES = Path(os.environ["XDG_DATA_HOME"]) / "Notes"
+STATE = Path(os.environ["XDG_STATE_HOME"]) / "launcher"
+UUID = "launcher-helper@jinwei.github.io"
 
 results: list[tuple[str, bool]] = []
 rates_written = 0.0  # "fetched" time of the rates.json seeded before the daemon starts
@@ -419,6 +422,88 @@ def run(daemon_log: str) -> int:
     check("Enter on a note opens it in Notes", opened)
     subprocess.run(["pkill", "-f", "--", f"--open {NOTES}"], check=False)
     time.sleep(0.5)
+
+    # 8. Setup problems reach the launcher's banner, and can be dismissed.
+    def launcher_height() -> int:
+        shot = Path(os.environ["XDG_CACHE_HOME"]) / "banner.png"
+        shot.unlink(missing_ok=True)
+        launcher("--show", "--mode", "all")
+        time.sleep(0.6)
+        action("debug-snapshot", str(shot))
+        wait_for(shot.exists, 3)
+        if SNAPSHOTS:
+            shutil.copy(shot, SNAPSHOTS / f"setup-banner-{len(results)}.png")
+        launcher("--hide")
+        time.sleep(0.3)
+        return GdkPixbuf.Pixbuf.new_from_file(str(shot)).get_height() if shot.exists() else 0
+
+    plain = launcher_height()
+    subprocess.run(["gnome-extensions", "disable", UUID], check=False)
+    reported = wait_for(
+        lambda: "setup: Helper extension: Turned off" in Path(daemon_log).read_text(), 15
+    )
+    check("a setup problem is noticed (helper extension turned off)", reported)
+    with_banner = launcher_height()
+    check("…and shown in the launcher's banner", with_banner > plain + 20,
+          f"{plain} -> {with_banner}")  # fmt: skip
+    action("dismiss-setup-problems")
+    dismissed = STATE / "dismissed.json"
+    remembered = wait_for(lambda: dismissed.exists() and "extension:" in dismissed.read_text())
+    check("dismissing remembers it", remembered)
+    check("…and hides the banner", launcher_height() == plain)
+    subprocess.run(["gnome-extensions", "enable", UUID], check=False)
+    check("…and forgets it once it is fixed", wait_for(lambda: dismissed.read_text() == "[]", 15))
+
+    # 9. The crash notice: a daemon that systemd restarted after a crash (faked with
+    # systemctl and journalctl stand-ins and systemd's INVOCATION_ID).
+    launcher("--quit")
+    time.sleep(1.0)
+    fake = Path(os.environ["XDG_CACHE_HOME"]) / "fakebin"
+    fake.mkdir(exist_ok=True)
+    (fake / "systemctl").write_text(
+        '#!/bin/sh\ncase "$*" in *NRestarts*) echo 1; exit 0;; esac\nexec /usr/bin/systemctl "$@"\n'
+    )
+    entries = [
+        {"_SYSTEMD_INVOCATION_ID": "crashed-run", "MESSAGE": "launcher started"},
+        {"_SYSTEMD_INVOCATION_ID": "crashed-run", "MESSAGE": "KeyError: 'boom'"},
+        {"INVOCATION_ID": "crashed-run", "MESSAGE": "Main process exited, status=6/ABRT"},
+        {"_SYSTEMD_INVOCATION_ID": "this-run", "MESSAGE": "launcher started again"},
+    ]
+    journal = "\n".join(json.dumps(e | {"__REALTIME_TIMESTAMP": "1"}) for e in entries)
+    (fake / "journalctl").write_text(f"#!/bin/sh\ncat <<'END'\n{journal}\nEND\n")
+    for tool in ("systemctl", "journalctl"):
+        (fake / tool).chmod(0o755)
+    monitor = subprocess.Popen(
+        ["dbus-monitor", "--session", "interface='org.gtk.Notifications'"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    )  # fmt: skip
+    time.sleep(0.5)
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "INVOCATION_ID": "this-run"}
+    restarted_log = open(Path(os.environ["XDG_CACHE_HOME"]) / "daemon2.log", "w")
+    restarted = subprocess.Popen(
+        [LAUNCHER, "--daemon", "--debug"], env=env, stdout=restarted_log, stderr=restarted_log
+    )
+    report = STATE / "crash.json"
+    check("a restart after a crash is noticed", wait_for(report.exists, 10))
+    lines = json.loads(report.read_text())["lines"] if report.exists() else []
+    check("…keeping the crashed run's last log lines",
+          [line.split(" ", 1)[1] for line in lines] == [
+              "launcher started", "KeyError: 'boom'", "Main process exited, status=6/ABRT"],
+          repr(lines))  # fmt: skip
+    time.sleep(1.0)
+    monitor.terminate()
+    sent = monitor.communicate(timeout=5)[0]
+    check("…with a notification", "The launcher crashed and was restarted" in sent)
+    check("…whose button opens Status", "app.show-status" in sent)
+    action("show-status")
+    check("Show Details opens Launcher Settings",
+          wait_for(lambda: window_open("Launcher Settings"), 10))  # fmt: skip
+    subprocess.run(["pkill", "-f", "--", "--settings --edit status"], check=False)
+    launcher("--quit")
+    try:
+        restarted.wait(5)
+    except subprocess.TimeoutExpired:
+        restarted.kill()
 
     app.proc.terminate()
     log_text = Path(daemon_log).read_text()

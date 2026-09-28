@@ -26,7 +26,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from launcher import doctor, paths  # noqa: E402
+from launcher import crash, doctor, paths  # noqa: E402
 from launcher.settings.window import SettingsWindow  # noqa: E402
 
 LAUNCHER = str(ROOT / ".venv/bin/launcher")
@@ -75,6 +75,19 @@ def buttons(row: Adw.ActionRow) -> dict[str, Gtk.Button]:
     found = {}
     widget = row.get_first_child()
     stack = [widget] if widget else []
+    while stack:
+        w = stack.pop()
+        if isinstance(w, Gtk.Button) and w.get_label():
+            found[w.get_label()] = w
+        child = w.get_first_child()
+        while child is not None:
+            stack.append(child)
+            child = child.get_next_sibling()
+    return found
+
+
+def buttons_in(widget: Gtk.Widget) -> dict[str, Gtk.Button]:
+    found, stack = {}, [widget]
     while stack:
         w = stack.pop()
         if isinstance(w, Gtk.Button) and w.get_label():
@@ -149,6 +162,29 @@ def main() -> int:
         check("…which copies the command", got == ["sudo apt install python3-gi-cairo"],
               repr(got))  # fmt: skip
     page._gather = real_gather
+
+    # The last crash: shown with its log lines, copied, cleared.
+    group = page._crash_group
+    check("no crash, no Last Crash section", not group.get_visible())
+    crash.save(crash.CrashReport(time.time(), 1, ["15:02:01 KeyError: 'boom'", "15:02:01 exit"]))
+    page.show_crash()
+    shown = page._crash_log.get_text()
+    check("a saved crash shows its log", group.get_visible() and "KeyError: 'boom'" in shown, shown)
+    check("…saying it was restarted once", "restarted once" in (group.get_description() or ""))
+    labels = buttons_in(group)
+    labels["Copy Log"].emit("clicked")
+    pump(0.2)
+    got = []
+    Gdk.Display.get_default().get_clipboard().read_text_async(
+        None, lambda c, r: got.append(c.read_text_finish(r))
+    )
+    wait(lambda: bool(got), 3)
+    check(
+        "Copy Log copies the lines", got == ["15:02:01 KeyError: 'boom'\n15:02:01 exit"], repr(got)
+    )
+    labels["Clear"].emit("clicked")
+    pump(0.2)
+    check("Clear removes it", not group.get_visible() and crash.load() is None)
 
     window.close()
     pump(0.3)

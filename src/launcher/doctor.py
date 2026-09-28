@@ -20,7 +20,7 @@ from . import APP_ID, paths
 from .config import Config, ConfigError, load_config
 
 OK, WARNING, ERROR = "ok", "warning", "error"
-EXTENSION_UUID = "launcher-helper@jinwei.github.io"
+EXTENSION_UUID = "launcher-helper@jinwei.github.io"  # as in helper.py
 HELPER_VERSION = 2  # the extension version this launcher needs (snippet cursor: v2)
 # GNOME Shell's ExtensionState values
 EXT_ACTIVE, EXT_INACTIVE, EXT_ERROR, EXT_OUT_OF_DATE = 1, 2, 3, 4
@@ -347,6 +347,61 @@ def _age(seconds: float) -> str:
     if seconds < 2 * DAY:
         return f"{int(seconds // 3600)} h"
     return f"{int(seconds // DAY)} days"
+
+
+# --- in the launcher's banner ----------------------------------------------------------
+
+# The config banner already shows config and shortcut problems; the service is the
+# launcher itself, which is evidently running.
+NOT_IN_BANNER = {"config", "shortcuts", "service"}
+
+
+def fingerprint(check: Check) -> str:
+    """Dismissing a problem hides it until it changes."""
+    return f"{check.key}:{check.detail}"
+
+
+def dismissed_file() -> Path:
+    return paths.state_dir() / "dismissed.json"
+
+
+def load_dismissed() -> set[str]:
+    try:
+        data = json.loads(dismissed_file().read_text(encoding="utf-8"))
+        return {str(x) for x in data} if isinstance(data, list) else set()
+    except (OSError, ValueError):
+        return set()
+
+
+def save_dismissed(dismissed: set[str]) -> None:
+    try:
+        dismissed_file().parent.mkdir(parents=True, exist_ok=True)
+        dismissed_file().write_text(json.dumps(sorted(dismissed)), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def launcher_problems(checks: list[Check], dismissed: set[str]) -> list[Check]:
+    """What the launcher's banner shows, most serious first."""
+    shown = [
+        c for c in checks
+        if c.status != OK and c.key not in NOT_IN_BANNER and fingerprint(c) not in dismissed
+    ]  # fmt: skip
+    return sorted(shown, key=lambda c: c.status != ERROR)
+
+
+def still_dismissed(checks: list[Check], dismissed: set[str]) -> set[str]:
+    """Forget dismissals of problems that went away, so they show if they come back."""
+    return dismissed & {fingerprint(c) for c in checks if c.status != OK}
+
+
+def banner_text(problems: list[Check]) -> str:
+    if not problems:
+        return ""
+    first = problems[0]
+    more = len(problems) - 1
+    text = f"{first.title}: {first.detail}"
+    return text + (f" (and {more} more)" if more else "")
 
 
 # --- reading the system ----------------------------------------------------------------

@@ -191,3 +191,31 @@ def test_long_shortcut_lists_are_shortened():
         "Not registered with GNOME: Launcher: Mode 0 (Super+0), Launcher: Mode 1 (Super+1), "
         "Launcher: Mode 2 (Super+2) and 2 more"
     )
+
+
+def test_banner_shows_setup_problems_not_config_ones():
+    facts = healthy(
+        config_error="bad",  # the config banner shows this already
+        shortcut_clashes=["x"],  # and this
+        service_enabled=False,  # the launcher is running: not worth a banner
+        gi_cairo=False,
+        extension_state=doctor.EXT_INACTIVE,
+    )
+    checks = evaluate(facts)
+    shown = doctor.launcher_problems(checks, set())
+    assert [c.key for c in shown] == ["extension", "pdf"]  # errors first
+    assert (
+        doctor.banner_text(shown) == "Helper extension: Turned off: clipboard history and "
+        "paste don't work (and 1 more)"
+    )
+    assert doctor.banner_text([]) == ""
+
+
+def test_dismissing_hides_a_problem_until_it_changes_or_returns():
+    off = evaluate(healthy(extension_state=doctor.EXT_INACTIVE))
+    dismissed = {doctor.fingerprint(c) for c in doctor.launcher_problems(off, set())}
+    assert doctor.launcher_problems(off, dismissed) == []
+    failed = evaluate(healthy(extension_state=doctor.EXT_ERROR, extension_error="boom"))
+    assert [c.key for c in doctor.launcher_problems(failed, dismissed)] == ["extension"]
+    assert doctor.still_dismissed(off, dismissed) == dismissed
+    assert doctor.still_dismissed(evaluate(healthy()), dismissed) == set()  # it went away

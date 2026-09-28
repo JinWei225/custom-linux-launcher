@@ -6,6 +6,7 @@ import functools
 import logging
 import signal
 import sys
+import threading
 import time
 from collections.abc import Callable
 from importlib import resources
@@ -19,7 +20,7 @@ gi.require_version("GLibUnix", "2.0")
 gi.require_version("GioUnix", "2.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GLibUnix, Gtk  # noqa: E402
 
-from . import APP_ID, appearance, launching, paths, shortcuts  # noqa: E402
+from . import APP_ID, appearance, crash, doctor, launching, paths, shortcuts  # noqa: E402
 from .clipboard_recorder import ClipboardRecorder  # noqa: E402
 from .clipboard_store import ClipboardStore, app_matches  # noqa: E402
 from .config import (  # noqa: E402
@@ -60,6 +61,8 @@ from .window import LauncherWindow  # noqa: E402
 log = logging.getLogger(__name__)
 
 CONFIG_RELOAD_DELAY_MS = 200
+SETUP_CHECK_DELAY_S = 3  # after startup, so the helper extension has answered
+SETUP_RECHECK_S = 60  # when the launcher opens, if the last check is older than this
 # After pasting a snippet (or other text): when to move the cursor to {cursor}, and when to put back
 # what was on the clipboard before (the app must have read the snippet by then).
 CURSOR_DELAY_MS = 150
@@ -87,6 +90,12 @@ class LauncherApp(Adw.Application):
         self._recorder: ClipboardRecorder | None = None
         self._paste_target: Target | None = None
         self._interface_settings: Gio.Settings | None = None
+        self._setup_checks: list[doctor.Check] = []
+        self._setup_checked = 0.0  # time.monotonic() of the last setup check
+        self._setup_running = False
+        self._setup_again = False
+        self._setup_banner = ""
+        self._dismissed = doctor.load_dismissed()
 
     # --- lifecycle -------------------------------------------------------------------
 
@@ -126,7 +135,7 @@ class LauncherApp(Adw.Application):
             lambda: self.config.clipboard,
             on_added=lambda: self.window and self.window.refresh_if_visible(),
         )
-        self._helper.on_availability(lambda _ok: self.window and self.window.refresh_layout())
+        self._helper.on_availability(lambda _ok: self._on_helper_availability())
         self._engine = Engine(
             {
                 "apps": apps,
@@ -160,6 +169,9 @@ class LauncherApp(Adw.Application):
         self._add_actions()
         self._watch_config()
         log.info("launcher started (config: %s)", paths.config_file())
+        # Give the helper extension a moment to answer before the first setup check.
+        GLib.timeout_add_seconds(SETUP_CHECK_DELAY_S, lambda: (self.check_setup(), False)[1])
+        threading.Thread(target=self._detect_crash, name="crash-check", daemon=True).start()
 
     def do_shutdown(self) -> None:
         if self._clips is not None:
@@ -200,6 +212,8 @@ class LauncherApp(Adw.Application):
             ("toggle", "s", lambda p: self._show(self._mode(p), toggle=True)),
             ("toggle-clipboard-pause", None, lambda p: self.toggle_clipboard_pause()),
             ("refresh-rates", None, lambda p: self._rates.refresh()),  # Settings' button
+            ("show-status", None, lambda p: self._show_status()),  # banner, crash notice
+            ("dismiss-setup-problems", None, lambda p: self._dismiss_setup_problems()),
             # Seconds of recent history to delete (pinned entries kept); 0 = everything.
             ("clear-clipboard", "x", lambda p: self.clear_clipboard(p.get_int64())),
             ("hide", None, lambda p: self.window.hide_launcher()),
@@ -241,6 +255,7 @@ class LauncherApp(Adw.Application):
             log.warning("config: %s", w)
         self.config = config
         appearance.apply(config.ui.appearance)
+        self.check_setup()
         self._engine.configure(config)
         self._prefetch_icons()
         self._file_watcher.configure(IndexSettings.from_config(config.files))
@@ -377,6 +392,8 @@ class LauncherApp(Adw.Application):
     # --- clipboard ---------------------------------------------------------------------
 
     def _show(self, mode: str, toggle: bool) -> None:
+        if time.monotonic() - self._setup_checked > SETUP_RECHECK_S:
+            self.check_setup()  # in the background; the banner updates if something changed
         if not (toggle and self.window.get_visible() and self.window.mode == mode):
             # Remember the window we are opened from: clipboard entries paste back into it.
             if target := self._foreign_focused_window():
@@ -386,6 +403,78 @@ class LauncherApp(Adw.Application):
             self.window.toggle_mode(mode)
         else:
             self.window.show_mode(mode)
+
+    # --- setup check and crashes -------------------------------------------------------
+
+    def check_setup(self) -> None:
+        """Run the setup check (`launcher --doctor`) in a thread; show problems in the
+        banner."""
+        if self._setup_running:
+            self._setup_again = True
+            return
+        self._setup_running = True
+
+        def work() -> None:
+            try:
+                checks = doctor.evaluate(doctor.gather())
+            except Exception:
+                log.exception("the setup check failed")
+                checks = None
+            GLib.idle_add(self._setup_checked_done, checks)
+
+        threading.Thread(target=work, name="setup-check", daemon=True).start()
+
+    def _setup_checked_done(self, checks: list[doctor.Check] | None) -> bool:
+        self._setup_running = False
+        self._setup_checked = time.monotonic()
+        if checks is not None:
+            self._setup_checks = checks
+            dismissed = doctor.still_dismissed(checks, self._dismissed)
+            if dismissed != self._dismissed:
+                self._dismissed = dismissed
+                doctor.save_dismissed(dismissed)
+            self._update_setup_banner()
+        if self._setup_again:
+            self._setup_again = False
+            self.check_setup()
+        return GLib.SOURCE_REMOVE
+
+    def _update_setup_banner(self) -> None:
+        problems = doctor.launcher_problems(self._setup_checks, self._dismissed)
+        text = doctor.banner_text(problems)
+        if text != self._setup_banner:
+            for problem in problems:
+                log.warning("setup: %s: %s", problem.title, problem.detail)
+            self._setup_banner = text
+        self.window.set_setup_problems(text)
+
+    def _dismiss_setup_problems(self) -> None:
+        problems = doctor.launcher_problems(self._setup_checks, self._dismissed)
+        self._dismissed |= {doctor.fingerprint(p) for p in problems}
+        doctor.save_dismissed(self._dismissed)
+        self._update_setup_banner()
+
+    def _on_helper_availability(self) -> None:
+        if self.window is not None:
+            self.window.refresh_layout()
+            self.check_setup()
+
+    def _show_status(self) -> None:
+        self.window.hide_launcher()
+        self.open_settings("status")
+
+    def _detect_crash(self) -> None:
+        report = crash.detect()
+        if report is not None:
+            GLib.idle_add(self._notify_crash)
+
+    def _notify_crash(self) -> bool:
+        notification = Gio.Notification.new("The launcher crashed and was restarted")
+        notification.set_body("It's running again. Show Details has its last log lines.")
+        notification.add_button("Show Details", "app.show-status")
+        notification.set_default_action("app.show-status")
+        self.send_notification("crash", notification)
+        return GLib.SOURCE_REMOVE
 
     def _foreign_focused_window(self) -> Target | None:
         """The focused window, unless it is the launcher's own."""

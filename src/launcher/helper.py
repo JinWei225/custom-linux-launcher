@@ -50,10 +50,15 @@ class Helper:
         self.available = False
         self.version = 0
         self._on_available: list[Callable[[bool], None]] = []
-        # Re-check whenever GNOME Shell (re)starts or the extension is toggled.
+        # Re-check whenever GNOME Shell (re)starts…
         self._watch = Gio.bus_watch_name_on_connection(
             self._bus, DEST, Gio.BusNameWatcherFlags.NONE,
             lambda *_: self.refresh(), lambda *_: self._set_available(False),
+        )  # fmt: skip
+        # …or the extension is turned on or off, which leaves GNOME Shell's name alone.
+        self._state_signal = self._bus.signal_subscribe(
+            DEST, "org.gnome.Shell.Extensions", "ExtensionStateChanged", "/org/gnome/Shell",
+            EXTENSION_UUID, Gio.DBusSignalFlags.NONE, lambda *_: self.refresh(),
         )  # fmt: skip
 
     def on_availability(self, callback: Callable[[bool], None]) -> None:

@@ -10,9 +10,9 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from .. import doctor  # noqa: E402
+from .. import crash, doctor  # noqa: E402
 from ..config import Config  # noqa: E402
 from .dialogs import action_row  # noqa: E402
 
@@ -51,8 +51,10 @@ class StatusPage(Adw.PreferencesPage):
         self._group.set_header_suffix(self._button)
         self._rows: list[Adw.ActionRow] = []
         self._show_checking()
+        self._crash_group = self._build_crash_group()
+        self.add(self._crash_group)  # first: the crash notice's button leads here
         self.add(self._group)
-        self.connect("map", lambda _p: self.run_checks())
+        self.connect("map", lambda _p: (self.run_checks(), self.show_crash()))
 
     # --- checking --------------------------------------------------------------------
 
@@ -136,6 +138,44 @@ class StatusPage(Adw.PreferencesPage):
             copy.connect("clicked", lambda _b, c=check: self._copy(c.shell))
             row.add_suffix(copy)
         return row
+
+    # --- the last crash --------------------------------------------------------------
+
+    def _build_crash_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup(title="The Launcher Crashed", visible=False)
+        buttons = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        copy = Gtk.Button(label="Copy Log")
+        copy.connect("clicked", lambda _b: self._copy_crash())
+        clear = Gtk.Button(label="Clear")
+        clear.connect("clicked", lambda _b: (crash.clear(), self.show_crash()))
+        buttons.append(copy)
+        buttons.append(clear)
+        group.set_header_suffix(buttons)
+        self._crash_log = Gtk.Label(
+            xalign=0, yalign=0, selectable=True, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+            margin_top=12, margin_bottom=12, margin_start=12, margin_end=12,
+        )  # fmt: skip
+        self._crash_log.add_css_class("monospace")
+        frame = Gtk.Frame(child=self._crash_log)
+        frame.add_css_class("view")
+        group.add(frame)
+        return group
+
+    def show_crash(self) -> None:
+        report = crash.load()
+        self._crash_group.set_visible(report is not None)
+        if report is None:
+            return
+        when = GLib.DateTime.new_from_unix_local(int(report.time)).format("%-d %B, %H:%M")
+        restarts = "once" if report.restarts == 1 else f"{report.restarts} times"
+        self._crash_group.set_description(f"{when}: restarted {restarts}. Its last log lines:")
+        self._crash_log.set_text("\n".join(report.lines) or "(nothing was logged)")
+
+    def _copy_crash(self) -> None:
+        report = crash.load()
+        if report is not None:
+            Gdk.Display.get_default().get_clipboard().set("\n".join(report.lines))
+            self.window.toast("Copied the log")
 
     # --- fixing ----------------------------------------------------------------------
 
