@@ -285,8 +285,41 @@ class GeneralPage(_Page):
         file_group.add(row)
         self.add(file_group)
 
+        notes = Adw.PreferencesGroup(
+            title="Notes",
+            description="Each note is a markdown file in this folder; sub-folders are "
+            "notebooks. Notes opens with Super+Shift+N.",
+        )
+        self._notes_folder = action_row(title="Notes Folder")
+        self._notes_folder.add_css_class("property")
+        choose = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+        choose.connect("clicked", lambda _b: self._pick_notes_folder())
+        self._notes_folder.add_suffix(choose)
+        notes.add(self._notes_folder)
+        self.add(notes)
+
+    def _pick_notes_folder(self) -> None:
+        dialog = Gtk.FileDialog(title="Notes Folder", modal=True)
+        current = Path(os.path.expanduser(self.window.config.notes.folder))
+        if current.is_dir():
+            dialog.set_initial_folder(Gio.File.new_for_path(str(current)))
+
+        def done(d: Gtk.FileDialog, result: Gio.AsyncResult) -> None:
+            try:
+                folder = d.select_folder_finish(result)
+            except GLib.Error:
+                return  # cancelled
+            path = folder.get_path()
+            if path:
+                shown = path.replace(str(Path.home()), "~", 1)
+                self._save_now(lambda w: w.set_value("notes", "folder", shown))
+                self.window.toast("Reopen Notes to use the new folder")
+
+        dialog.select_folder(self.window, None, done)
+
     def refresh(self, config: Config) -> None:
         self._loading = True
+        self._notes_folder.set_subtitle(config.notes.folder)
         self._width.set_value(config.ui.width)
         self._rows.set_value(config.ui.max_results)
         self._hide.set_active(config.ui.hide_on_focus_loss)
@@ -310,6 +343,7 @@ class ShortcutsPage(_Page):
         "clipboard": ("Clipboard History", "Paste something you copied earlier"),
         "clipboard_pause": ("Pause Clipboard Recording", "Toggle; nothing copied is saved"),
         "snippets": ("Snippets", "Search your snippets and paste one"),
+        "notes": ("Notes", "Open your notes, or bring them to the front"),
     }
 
     def __init__(self, window: SettingsWindow) -> None:

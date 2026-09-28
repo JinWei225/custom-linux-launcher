@@ -40,6 +40,7 @@ install:
 	ln -sf $(INSTALL_VENV)/bin/launcher $(BIN_DIR)/launcher
 	install -Dm644 data/$(APP_ID).desktop $(APPS_DIR)/$(APP_ID).desktop
 	install -Dm644 data/$(APP_ID).Settings.desktop $(APPS_DIR)/$(APP_ID).Settings.desktop
+	install -Dm644 data/$(APP_ID).Notes.desktop $(APPS_DIR)/$(APP_ID).Notes.desktop
 	install -Dm644 data/launcher.service $(UNIT_DIR)/launcher.service
 	systemctl --user daemon-reload
 	systemctl --user enable launcher.service
@@ -48,7 +49,7 @@ install:
 uninstall:
 	-systemctl --user disable --now launcher.service
 	rm -f $(UNIT_DIR)/launcher.service $(APPS_DIR)/$(APP_ID).desktop $(BIN_DIR)/launcher
-	rm -f $(APPS_DIR)/$(APP_ID).Settings.desktop
+	rm -f $(APPS_DIR)/$(APP_ID).Settings.desktop $(APPS_DIR)/$(APP_ID).Notes.desktop
 	rm -rf $(INSTALL_VENV)
 	systemctl --user daemon-reload
 

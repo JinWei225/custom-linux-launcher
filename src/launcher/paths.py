@@ -25,6 +25,10 @@ def cache_dir() -> Path:
     return _xdg("XDG_CACHE_HOME", ".cache") / "launcher"
 
 
+def state_dir() -> Path:
+    return _xdg("XDG_STATE_HOME", ".local/state") / "launcher"
+
+
 def rates_file() -> Path:
     """Exchange rates downloaded for the currency converter."""
     return cache_dir() / "rates.json"

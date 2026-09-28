@@ -33,7 +33,9 @@ def test_desired_bindings_cover_modes_apps_and_links():
     assert shlex.split(link.command)[-1] == "quicklink:Git Hub"  # quoted: name has a space
     snippet = next(b for k, b in bindings.items() if k.startswith(OWNED_PREFIX + "snippet-"))
     assert shlex.split(snippet.command)[-1] == "snippet:Sig"
-    assert len(bindings) == 5
+    assert bindings["launcher-notes"].command.endswith("--notes")  # on by default
+    assert bindings["launcher-notes"].accel == "<Super><Shift>n"
+    assert len(bindings) == 6
 
 
 def test_slug_is_dconf_safe_and_distinct():

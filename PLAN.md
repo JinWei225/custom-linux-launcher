@@ -21,6 +21,7 @@ Decisions are marked **🔶 Dn**. Each lists the options and a recommendation. R
 | 6 | Clipboard history (text and images) with direct paste | M4 |
 | 7 | Snippets: direct paste and expansion while typing | M5 |
 | 9 | Converters in the main search: dates in words, timezones, currency (online rates) | M6 |
+| 10 | Notes: markdown notes with formatting applied as you type, sidebar of folders | M7 |
 
 Out of scope for now: plugins/extensions API, calculator, window switcher, emoji picker. Any of these can be added later as another provider.
 
@@ -170,6 +171,16 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - **Currency:** open.er-api.com (free, no key, ~160 currencies, daily), fetched in the background, cached on disk and refreshed every 6 h; typing never waits on the network and cached rates are used offline. ISO codes, currency names, shorthand (1.5k) and arithmetic; no symbols. Without a target, only the home currency is shown.
 - **Settings:** a Converters page in Launcher Settings (`[converters]` in config.toml).
 
+### ✅ D11 — Notes (M7) — **decided 2026-09-28**
+- **Editor:** native Gtk.TextView with our own live formatting (no WebKit: only the GTK 3 build is installed, and a native view works best with the pinyin/hangul input methods).
+- **Markers:** applied as you type and hidden; shown again on the line the cursor is on (live preview, like Obsidian/Typora). The file always stays plain markdown.
+- **Storage:** one `.md` file per note in `~/Notes` (configurable), sub-folders as notebooks; named after the title; pins in `.notes.json`; deleting goes to the Trash.
+- **Sidebar:** Pinned, Recent, then the folder tree; hideable (F9). No tags or full-text search for now.
+- **Formatting:** headings, bullet/numbered lists, checkboxes, quotes, code blocks, horizontal lines, bold/italic/strike/code/highlight, links, pasted images.
+- **Window:** a normal window in its own process (like Launcher Settings), Super+Shift+N.
+- **Autosave:** 1 s after typing stops, as soon as another window is focused, on switching notes and on closing; nothing is written if the text is unchanged.
+- **Extras:** outline of headings, export to PDF, notes in the launcher's search.
+
 ---
 
 ## 4. Behaviour details
@@ -281,6 +292,17 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 
 **Settings → Converters** (built 2026-09-28): a switch per converter; home currency (a searchable list of the codes in `rates.json`, "Automatic (MYR)" first); how often to download rates (1–168 h); when the rates were published and downloaded, with **Refresh Now**, which runs the daemon's `refresh-rates` action (the daemon owns the cache) and re-reads the file after 1, 4 and 12 s; and the ExchangeRate-API attribution link. The window's default width grew to 1140 px so all 8 page names fit. Checked by driving the real page in the nested shell (switch and combo write the config, the action reaches the daemon, a stopped daemon is reported); `tests/test_config_writer.py` covers the `[converters]` round trip.
 
+### 4.6 Notes (M7, see D11)
+**Part 1 — window, storage, sidebar, autosave** (built 2026-09-28):
+- `launcher --notes` (Super+Shift+N, "Notes" in the app grid) runs its own single-instance app, `io.github.jinwei.Launcher.Notes`. A second call brings the window to the front; `--open NOTE` opens a note (relative to the notes folder, or an absolute path inside it), `--new TITLE` starts one.
+- **Storage** (`notes_store.py`, pure): `[notes] folder` (default `~/Notes`, set in Settings → General). Only `*.md` files are notes; names starting with `.` and `attachments` folders are hidden. The title is the first non-empty line without `#`/list markers (a bare `#` being typed counts as no title). New notes are `Untitled.md`, `Untitled 2.md`…; clashes are checked case-insensitively. Writes are atomic (temp file + fsync + rename).
+- **Renaming follows the title** only when the title was edited in this window, so files made elsewhere (e.g. `my-file-name.md`) keep their names until you change their title. Pins follow renames, moves and folder renames.
+- **Autosave** (`NoteSession`): 1 s after the last change; immediately when the compositor reports another window focused (the same `Gdk.ToplevelState.FOCUSED` signal the launcher uses, so input-method popups don't count); when switching notes; on close. Unchanged text is never rewritten. Text still being composed by an input method isn't in the buffer yet and is saved once committed. A note created empty and left empty is deleted instead of saved.
+- **Other apps:** every folder is watched (Gio.FileMonitor, 300 ms debounce). A changed file reloads silently when there are no unsaved edits (cursor kept); with unsaved edits a banner offers Reload, and typing on keeps yours. A deleted/moved open note closes, or is written back if it had unsaved edits.
+- **Window:** Adw.OverlaySplitView sidebar (Pinned, Recent (10), All Notes tree with expandable folders), toggled with F9 or the header button; below 640sp wide the sidebar overlays the text (half a screen beside slides). The text column is at most 820 px, centred. Right-click menus: Pin/Unpin, Rename…, Move To…, Move to Trash; folders: New Note Here, New Folder Here…, Rename…, Move to Trash (with a count). Ctrl+N new note (in the open note's folder), Ctrl+W close. Size, maximized, sidebar, expanded folders and the last note are kept in `~/.local/state/launcher/notes.json`.
+- **Trash:** via GIO; if the Trash isn't available (e.g. notes on a system mount) the note stays and a toast says why.
+- **Tests:** `tests/test_notes_store.py` (titles, names, tree, create/save/rename/move/delete, folders, pins, NoteSession rules, config). `tools/nested_notes_test.py` drives the real window in the nested shell (25 checks: pause autosave and rename, save on focus loss, no write when unchanged, pins, folders, reload vs conflict banner, empty-note discard, Trash success and failure, close/restore, narrow layout, single instance).
+
 ---
 
 ## 5. Project layout
@@ -313,6 +335,8 @@ linux-launcher/
 │   ├── clipboard_store.py        # clipboard history storage (pure)
 │   ├── clipboard_recorder.py     # ClipboardChanged → store, privacy rules, thumbnails
 │   ├── settings/                 # Launcher Settings app (window, dialogs, debug renderer)
+│   ├── notes_store.py            # notes on disk: tree, save/rename, pins, NoteSession (pure)
+│   ├── notes/                    # Notes app: app.py (single instance), window.py, sidebar.py
 │   └── providers/
 │       ├── base.py               # Result, Provider and Host protocols
 │       ├── commands.py           # built-in: reload config, open config, quit
@@ -349,7 +373,8 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
 | **M6** ✅ | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **Built 2026-09-28:** ~350 new unit tests; 26/26 end-to-end checks in a nested shell; waiting on your daily-use check |
-| **M7** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
+| **M7** | Notes: live-markdown editor, sidebar, autosave, outline, PDF, launcher search | ✅ D11 | Taking a full lecture's notes needs no manual save and no markdown syntax on screen. **In progress 2026-09-28:** part 1 (window, storage, sidebar, autosave) built |
+| **M8** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)
 - Providers are plain Python with no GTK imports, so they can be unit tested without a display.
@@ -385,3 +410,4 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | D8 | Shortcuts | Super+Shift + Return / V / P / S / F; main launcher kept on Ctrl+Space | 2026-09-24 | All editable in Launcher Settings with clash checks |
 | D9 | Autostart/packaging | systemd --user service + uv | 2026-09-24 | |
 | D10 | Converters | Auto-detect in main search; Enter copies / Alt+Enter pastes; own English date parser; open.er-api.com with disk cache; home currency only; 12/24 h from GNOME; Settings page | 2026-09-28 | Fixed-date holidays only |
+| D11 | Notes | Native GtkTextView live preview; .md files in ~/Notes; folders + pinned/recent; normal window, Super+Shift+N; autosave on pause and focus loss | 2026-09-28 | Part 1 built |

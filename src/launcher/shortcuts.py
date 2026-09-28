@@ -77,6 +77,7 @@ def desired_bindings(config: Config, command: str) -> list[Binding]:
             f"{run} --clipboard-pause",
         ),
         "snippets": ("launcher-snippets", "Launcher: Snippets", f"{run} --mode snippets"),
+        "notes": ("launcher-notes", "Launcher: Notes", f"{run} --notes"),
     }
     bindings = []
     for mode, (key, name, cmd) in modes.items():

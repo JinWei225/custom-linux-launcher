@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Notes
+Comment=Markdown notes that format as you type
+Exec=launcher --notes
+Icon=accessories-text-editor
+Terminal=false
+StartupNotify=true
+Categories=Office;Utility;
+Keywords=notes;markdown;notebook;class;lecture;

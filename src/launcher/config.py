@@ -65,6 +65,7 @@ class ShortcutsConfig:
     clipboard: str = "<Super><Shift>v"
     clipboard_pause: str = "<Super><Shift>p"  # pause / resume clipboard recording
     snippets: str = "<Super><Shift>s"
+    notes: str = "<Super><Shift>n"
 
 
 # Password managers: never record what they copy (they also mark secrets with a hint).
@@ -127,6 +128,11 @@ class FilesConfig:
 
 
 @dataclass(frozen=True)
+class NotesConfig:
+    folder: str = "~/Notes"  # one markdown file per note; sub-folders are notebooks
+
+
+@dataclass(frozen=True)
 class ConvertersConfig:
     """Answers typed straight into the main launcher ("tomorrow", "days until xmas")."""
 
@@ -144,6 +150,7 @@ class Config:
     shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig)
     clipboard: ClipboardConfig = field(default_factory=ClipboardConfig)
     converters: ConvertersConfig = field(default_factory=ConvertersConfig)
+    notes: NotesConfig = field(default_factory=NotesConfig)
     # desktop file id ("code.desktop") -> alias / hotkey
     apps: dict[str, AppSettings] = field(default_factory=dict, metadata={"tables": AppSettings})
     quicklinks: tuple[QuickLink, ...] = field(
@@ -194,6 +201,7 @@ files = "<Super><Shift>f"
 clipboard = "<Super><Shift>v"
 clipboard_pause = "<Super><Shift>p"
 snippets = "<Super><Shift>s"
+notes = "<Super><Shift>n"
 
 # Clipboard history (Super+Shift+V). Needs the Launcher Helper GNOME extension.
 [clipboard]
@@ -221,6 +229,10 @@ timezones = true          # "time in tokyo", "3pm tokyo", "3pm pst to london"
 currency = true           # "100 usd", "1.5k jpy to myr" (rates from open.er-api.com)
 home_currency = ""        # e.g. "MYR"; "" = the currency of your timezone's country
 refresh_hours = 6         # how often to download new exchange rates (1-168)
+
+# Notes (Super+Shift+N): one markdown file per note in this folder.
+[notes]
+folder = "~/Notes"
 
 # Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
 # and press Ctrl+E to set these without editing this file.
@@ -292,6 +304,7 @@ def parse_config(
     config = _build(Config, data, "", warnings)
     _check_links_and_aliases(config)
     _check_converters(config)
+    _check_notes(config)
     _check_snippets(config)
     _check_hotkeys(config)
     return config, warnings
@@ -432,6 +445,11 @@ def _check_links_and_aliases(config: Config) -> None:
     names = [link.name.casefold() for link in config.quicklinks]
     if len(set(names)) != len(names):
         raise ConfigError("two quicklinks have the same name; names must be unique")
+
+
+def _check_notes(config: Config) -> None:
+    if not config.notes.folder.strip():
+        raise ConfigError("notes.folder must not be empty")
 
 
 def _check_converters(config: Config) -> None:

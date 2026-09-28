@@ -10,6 +10,7 @@ launcher --import-espanso   move espanso's base.yml matches into snippets.toml
 launcher --run app:ID       launch an app / quicklink / snippet (what hotkeys run)
 launcher --settings [--edit app:ID|quicklink:NAME|snippet:NAME]   open Launcher Settings
 launcher --clipboard-pause  pause / resume clipboard recording
+launcher --notes [--open NOTE | --new TITLE]   open Notes (a note, or a new one)
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--run", metavar="ITEM", help="run app:<desktop id>, quicklink:<name> or snippet:<name>"
     )
     group.add_argument("--settings", action="store_true", help="open Launcher Settings")
+    group.add_argument("--notes", action="store_true", help="open Notes")
+    parser.add_argument("--open", metavar="NOTE", help="with --notes: open this note")
+    parser.add_argument("--new", metavar="TITLE", help="with --notes: start a new note")
     group.add_argument(
         "--clipboard-pause", action="store_true", help="pause / resume clipboard recording"
     )
@@ -93,6 +97,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"moved {snippet.trigger}  ->  {snippet.name}")
         print(f"{len(moved)} snippet(s) moved to {paths.config_dir() / 'snippets.toml'}")
         return 0
+
+    if args.notes:
+        from .notes.app import run_notes
+
+        return run_notes(args.open, args.new)
 
     if args.settings:
         from .settings.app import run_settings
