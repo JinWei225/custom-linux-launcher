@@ -127,11 +127,19 @@ class FilesConfig:
 
 
 @dataclass(frozen=True)
+class ConvertersConfig:
+    """Answers typed straight into the main launcher ("tomorrow", "days until xmas")."""
+
+    dates: bool = True
+
+
+@dataclass(frozen=True)
 class Config:
     ui: UIConfig = field(default_factory=UIConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig)
     clipboard: ClipboardConfig = field(default_factory=ClipboardConfig)
+    converters: ConvertersConfig = field(default_factory=ConvertersConfig)
     # desktop file id ("code.desktop") -> alias / hotkey
     apps: dict[str, AppSettings] = field(default_factory=dict, metadata={"tables": AppSettings})
     quicklinks: tuple[QuickLink, ...] = field(
@@ -199,6 +207,11 @@ terminal_apps = [
   "gnome-terminal-server", "kitty", "Alacritty", "org.wezfurlong.wezterm", "foot",
   "com.gexperts.Tilix", "org.kde.konsole", "xterm",
 ]
+
+# Answers shown at the top of the main launcher while you type. Enter copies the
+# answer, Alt+Enter pastes it into the window you came from.
+[converters]
+dates = true              # "tomorrow", "2 months after today", "days until christmas"
 
 # Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
 # and press Ctrl+E to set these without editing this file.

@@ -20,6 +20,7 @@ Decisions are marked **🔶 Dn**. Each lists the options and a recommendation. R
 | 8 | Global keyboard shortcuts per mode | M3 |
 | 6 | Clipboard history (text and images) with direct paste | M4 |
 | 7 | Snippets: direct paste and expansion while typing | M5 |
+| 9 | Converters in the main search: dates in words, timezones, currency (online rates) | M6 |
 
 Out of scope for now: plugins/extensions API, calculator, window switcher, emoji picker. Any of these can be added later as another provider.
 
@@ -160,6 +161,15 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - B. XDG autostart `.desktop` file
 - Install method: **`uv`** for the Python package, plus a `make install` target for the extension, service and desktop file.
 
+### ✅ D10 — Converters (M6) — **decided 2026-09-28**
+- **Trigger:** detected automatically in the main launcher; text that isn't a conversion adds nothing. No keyword or separate mode.
+- **Keys:** Enter copies the answer, Alt+Enter pastes it into the window the launcher was opened from (like a snippet: not recorded, the previous clipboard entry is put back).
+- **Ranking:** an answer scores 1.9: above any fuzzy match (even with a frecency boost), below an exact alias (2.0). A bare place name ("tokyo") ranks below every real match instead. Answers are never learned for frecency.
+- **Dates:** English only, own parser, no dependency. Main row copies ISO `2026-11-28` (long form as subtitle), second row copies `Saturday, 28 November 2026`. Day counts ("days until …", "X to Y"). Fixed-date holidays only (Christmas, New Year, Halloween…), no lunar or moving ones.
+- **Timezones:** "time in / <place> time / <place>", "<time> <place>" → local time, "<time> <place> to <place>". Cities, countries, IANA ids, abbreviations, UTC±N, plus an alias table for cities the tz database doesn't name. 12/24 h follows GNOME's `clock-format`.
+- **Currency:** open.er-api.com (free, no key, ~160 currencies, daily), fetched in the background, cached on disk and refreshed every 6 h; typing never waits on the network and cached rates are used offline. ISO codes, currency names, shorthand (1.5k) and arithmetic; no symbols. Without a target, only the home currency is shown.
+- **Settings:** a Converters page in Launcher Settings (`[converters]` in config.toml).
+
 ---
 
 ## 4. Behaviour details
@@ -237,6 +247,20 @@ body = "{date:%Y-%m-%d}"  # placeholders: {date:fmt}, {clipboard}, {cursor}
 ```
 launcherd translates placeholders into espanso `vars` when it generates the YAML, and expands them itself when pasting directly.
 
+### 4.5 Converters (M6, see D10)
+Answers appear at the top of the main launcher while you type. Enter copies, Alt+Enter pastes (`Host.paste_text`, shared with snippets: the pasted text is skipped by the recorder and the entry that was on the clipboard before is put back). `[converters]` in config.toml turns each one on or off.
+
+**Dates** (`dates.py` parser, `providers/dates.py`; built 2026-09-28). Everything is relative to today:
+- Named days: today/now, tomorrow (tmr), yesterday, the day after tomorrow, the day before yesterday.
+- Offsets with number words: `in 3 days`, `two months after today`, `3 days ago`, `a week from tomorrow`, `2 weeks and 3 days from now`, `one week after 26 October 2026`, `christmas - 3 days`, `today + 10d`. Units: days, weeks, fortnights, months, years.
+- Weekdays: `friday` and `next friday` are the first Friday after today (never today), `this friday` is the one in the current Monday–Sunday week, `last friday` the most recent before today. Abbreviations (`fri`) only count after next/last/this, so `sun` or `wed` still searches apps.
+- `next week/month/year` = today + 1 of them. `end of month`, `start of next month`, `end of next week`, `end of february`; `last monday of october`, `2nd tue in march 2027`.
+- Written dates: ISO, day-first `25/12[/2026]`, `dec 25`, `25th of december 2027`. Without a year: the next one (today counts). A month name alone is not a date.
+- Fixed-date holidays: new year('s day/eve), valentine's, april fools, halloween, christmas (eve), xmas, boxing day; optionally with a year.
+- Day counts: `days until christmas`, `until friday`, `days since 2026-01-01`, `2026-10-01 to 2026-12-25`, `days between X and Y` → "88 days", subtitle "12 weeks 4 days · Mon 28 Sep 2026 → Fri 25 Dec 2026"; copies the number. In a "since" phrase, `friday`/`christmas` mean the last one before today.
+- Adding months stops at the end of the month: Jan 31 + 1 month = Feb 28.
+- **Tests:** `tests/test_dates.py` (~160 cases); the nested end-to-end test checks that Alt+Enter on `tomorrow` pastes the date, that it isn't recorded, and that the clipboard is put back.
+
 ---
 
 ## 5. Project layout
@@ -276,6 +300,7 @@ linux-launcher/
 │       ├── quicklinks.py         # quicklinks + fallback web searches
 │       ├── files.py
 │       ├── clipboard.py
+│       ├── dates.py              # date answers (parser in ../dates.py)
 │       └── snippets.py           # + espanso YAML generator
 ├── extension/launcher-helper@jinwei.github.io/
 │   ├── metadata.json             # shell-version: ["50"]
@@ -301,7 +326,8 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
-| **M6** | Polish: preferences window (if D6 = B), themes, per-item hotkeys, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
+| **M6** | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **In progress 2026-09-28:** dates built |
+| **M7** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)
 - Providers are plain Python with no GTK imports, so they can be unit tested without a display.
@@ -336,3 +362,4 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | D7 | Clipboard rules | 500 / 30 days / 20 MB; secret hint + exclude_apps; pause; dedupe; no primary | 2026-09-24 | Pinned entries never expire; list is newest-first |
 | D8 | Shortcuts | Super+Shift + Return / V / P / S / F; main launcher kept on Ctrl+Space | 2026-09-24 | All editable in Launcher Settings with clash checks |
 | D9 | Autostart/packaging | systemd --user service + uv | 2026-09-24 | |
+| D10 | Converters | Auto-detect in main search; Enter copies / Alt+Enter pastes; own English date parser; open.er-api.com with disk cache; home currency only; 12/24 h from GNOME; Settings page | 2026-09-28 | Fixed-date holidays only |

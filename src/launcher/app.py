@@ -40,6 +40,7 @@ from .providers.apps import AppsProvider  # noqa: E402
 from .providers.base import Result  # noqa: E402
 from .providers.clipboard import ClipboardProvider  # noqa: E402
 from .providers.commands import CommandsProvider  # noqa: E402
+from .providers.dates import DatesProvider  # noqa: E402
 from .providers.files import FilesProvider  # noqa: E402
 from .providers.quicklinks import (  # noqa: E402
     QuickLinksProvider,
@@ -54,7 +55,7 @@ from .window import LauncherWindow  # noqa: E402
 log = logging.getLogger(__name__)
 
 CONFIG_RELOAD_DELAY_MS = 200
-# After pasting a snippet: when to move the cursor to {cursor}, and when to put back
+# After pasting a snippet (or other text): when to move the cursor to {cursor}, and when to put back
 # what was on the clipboard before (the app must have read the snippet by then).
 CURSOR_DELAY_MS = 150
 RESTORE_CLIPBOARD_DELAY_MS = 500
@@ -118,6 +119,7 @@ class LauncherApp(Adw.Application):
                 "apps": apps,
                 "quicklinks": QuickLinksProvider(self, icons=self._website_icon),
                 "commands": CommandsProvider(self),
+                "dates": DatesProvider(self),
                 "websearch": WebSearchProvider(self, icons=self._website_icon),
                 "files": FilesProvider(self, file_index),
                 "clipboard": ClipboardProvider(self, self._clips, app_name=_app_name),
@@ -443,26 +445,37 @@ class LauncherApp(Adw.Application):
             lambda data: then(*expand(body, clipboard=(data or b"").decode("utf-8", "replace"))),
         )
 
+    def _can_paste(self) -> bool:
+        return self._helper.available and self._paste_target is not None
+
     def paste_snippet(self, name: str) -> None:
-        if not self._helper.available or self._paste_target is None:
+        if not self._can_paste():
             self.copy_snippet(name)
             self._notify("Snippet copied to the clipboard", "Press Ctrl+V to paste it.")
             return
-        # What the clipboard holds now, to put back once the snippet is pasted. Only a
-        # recorded history entry can be restored (never a password, say).
+        self._expand_snippet(name, self._paste_text)
+
+    def paste_text(self, text: str) -> None:
+        """Paste a converter's answer into the window the launcher was opened from."""
+        if not self._can_paste():
+            self.copy_text(text)
+            self._notify("Copied to the clipboard", "Press Ctrl+V to paste it.")
+            return
+        self._paste_text(text, 0)
+
+    def _paste_text(self, text: str, after_cursor: int) -> None:
+        """Paste text without it entering clipboard history, then put back what the
+        clipboard held before. Only a recorded history entry can be put back (never a
+        password, say)."""
         restore = self._recorder.current if self._recorder is not None else None
+        if self._recorder is not None:
+            self._recorder.skip_text(text)  # a paste is not a copy: keep it out
+        if not self._helper.set_clipboard(TEXT_MIME, text.encode()):
+            self.notify_error("Not pasted", "The clipboard could not be set.")
+            return
+        self._paste(lambda ok: self._after_text_paste(ok, after_cursor, restore))
 
-        def paste(text: str, after_cursor: int) -> None:
-            if self._recorder is not None:
-                self._recorder.skip_text(text)  # a snippet is not a copy: keep it out
-            if not self._helper.set_clipboard(TEXT_MIME, text.encode()):
-                self.notify_error("Snippet not pasted", "The clipboard could not be set.")
-                return
-            self._paste(lambda ok: self._after_snippet_paste(ok, after_cursor, restore))
-
-        self._expand_snippet(name, paste)
-
-    def _after_snippet_paste(self, pasted: bool, after_cursor: int, restore: int | None) -> None:
+    def _after_text_paste(self, pasted: bool, after_cursor: int, restore: int | None) -> None:
         if not self._on_pasted(pasted):
             return  # the snippet stays on the clipboard for Ctrl+V
         if after_cursor and self._helper.version >= 2:

@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 # Providers queried in each mode, in tie-break order.
 MODES: dict[str, tuple[str, ...]] = {
-    "all": ("apps", "quicklinks", "snippet-search", "commands", "websearch"),
+    "all": ("apps", "quicklinks", "snippet-search", "commands", "dates", "websearch"),
     "apps": ("apps",),
     "files": ("files",),
     "clipboard": ("clipboard",),

@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 import gi
@@ -207,6 +208,30 @@ def run(daemon_log: str) -> int:
     SNIPPETS.write_text(SNIPPETS.read_text().replace(";hi", ";hey"))
     time.sleep(1.0)
     check("editing snippets updates espanso", ";hey" in ESPANSO.read_text())
+
+    # 2c. Converters: Alt+Enter pastes the answer, like a snippet (Enter only copies).
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    app.send("clear")
+    app.read(0.3)
+    launcher("--show", "--mode", "all")
+    time.sleep(0.8)
+    action("debug-set-query", "tomorrow")
+    time.sleep(0.4)
+    if SNAPSHOTS:
+        action("debug-snapshot", str(SNAPSHOTS / "dates.png"))
+        time.sleep(0.2)
+    action("debug-run-selected-alt")
+    app.read(2.5)
+    check("Alt+Enter pastes a date answer", tomorrow in app.texts(), repr(app.texts()[-2:]))
+    check("pasted answers are not recorded", all(c["text"] != tomorrow for c in clips()))
+    app.send("read-clipboard")
+    app.read(0.5)
+    got = app.last("clipboard")
+    check(
+        "clipboard is put back after an answer",
+        got is not None and got.get("text") == "first entry from the app",
+        repr(got),
+    )
 
     # 3. An image is recorded with thumbnails.
     png = Path(os.environ["XDG_CACHE_HOME"]) / "picture.png"

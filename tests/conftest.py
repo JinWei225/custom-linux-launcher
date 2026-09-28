@@ -25,6 +25,9 @@ class FakeHost:
     def copy_text(self, text):
         self.calls.append(("copy", text))
 
+    def paste_text(self, text):
+        self.calls.append(("paste-text", text))
+
     def open_file(self, path):
         self.calls.append(("open-file", path))
 
