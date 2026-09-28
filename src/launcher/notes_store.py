@@ -21,11 +21,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .notes_markdown import ATTACHMENTS, attachment_links
+
 log = logging.getLogger(__name__)
 
 UNTITLED = "Untitled"
 PINS_FILE = ".notes.json"
-ATTACHMENTS = "attachments"
 MAX_NAME = 80
 
 
@@ -260,16 +261,34 @@ class NotesStore:
         return self.save(rel, "".join(lines), rename=True)
 
     def move(self, rel: str, folder: str) -> str:
+        """Move a note to another folder, with the attachments it links to (they live
+        in attachments/ next to the note, so its links keep working)."""
         path = self.path(rel)
         directory = self.path(folder)
         if path.parent == directory:
             return rel
         directory.mkdir(parents=True, exist_ok=True)
         target = self._free(directory, path.stem)
+        try:
+            links = attachment_links(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            links = []
         os.rename(path, target)
+        for link in links:
+            source = path.parent / link
+            if source.is_file() and not (directory / link).exists():
+                (directory / ATTACHMENTS).mkdir(exist_ok=True)
+                try:
+                    os.rename(source, directory / link)
+                except OSError as e:
+                    log.warning("could not move attachment %s: %s", source, e)
         new = self._rel(target)
         self._repin(rel, new)
         return new
+
+    def attachments_dir(self, rel: str) -> Path:
+        """Where images pasted into this note are saved."""
+        return self.path(rel).parent / ATTACHMENTS
 
     def delete(self, rel: str) -> None:
         """Move a note to the Trash."""

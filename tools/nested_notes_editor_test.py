@@ -51,6 +51,15 @@ def pump(seconds: float) -> None:
         time.sleep(0.01)
 
 
+def wait(predicate, seconds: float) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        pump(0.05)
+        if predicate():
+            return True
+    return False
+
+
 class Typist:
     def __init__(self, window: NotesWindow) -> None:
         self.editor = window.editor
@@ -292,6 +301,147 @@ def main() -> int:
     )
     check("code lines are monospace", "md-code" in t.tags(1, 2) and "h1" not in t.tags(1, 2))
 
+    # Inline styles: applied once the closing marker is typed; markers hidden elsewhere.
+    t.clear()
+    t.type("some **bold")
+    check("unclosed ** stays plain", "md-bold" not in t.tags(0, 8))
+    t.type("** text")
+    check("closing ** makes it bold", "md-bold" in t.tags(0, 8), repr(t.tags(0, 8)))
+    check("inline markers shown on the cursor's line", "md-markup" in t.tags(0, 5))
+    t.type("\n")
+    check("inline markers hidden on other lines", "md-hidden" in t.tags(0, 5))
+    for typed, col, tag in (
+        ("*it*", 1, "md-italic"),
+        ("_it_", 1, "md-italic"),
+        ("~~gone~~", 2, "md-strike"),
+        ("`x = 1`", 1, "md-inline-code"),
+        ("==key==", 2, "md-highlight"),
+        ("<u>under</u>", 3, "md-underline"),
+        ("- **in a list**", 4, "md-bold"),
+        ("## **heading**", 5, "md-bold"),
+    ):
+        t.clear()
+        t.type(typed)
+        check(f"{typed} is styled", tag in t.tags(0, col), repr(t.tags(0, col)))
+    t.clear()
+    t.type("```\n**not bold**")
+    check("no inline styles in code blocks", "md-bold" not in t.tags(1, 3))
+
+    # Shortcuts wrap the selection, and unwrap it again.
+    t.clear()
+    t.type("make this bold")
+    t.go(0, 5)
+    it = window.buffer.get_iter_at_line(0)[1]
+    it.set_line_offset(9)
+    window.buffer.select_range(t.cursor(), it)
+    t.key(Gdk.KEY_b, CTRL)
+    check("Ctrl+B wraps the selection", t.text() == "make **this** bold", repr(t.text()))
+    bounds = window.buffer.get_selection_bounds()
+    check("the words stay selected", bounds and window.buffer.get_text(*bounds, True) == "this")
+    t.key(Gdk.KEY_b, CTRL)
+    check("Ctrl+B again unwraps it", t.text() == "make this bold", repr(t.text()))
+    t.key(Gdk.KEY_i, CTRL)
+    check("Ctrl+I italic", t.text() == "make *this* bold", repr(t.text()))
+    window.buffer.undo()
+    pump(0.05)
+    check("one undo removes a style", t.text() == "make this bold", repr(t.text()))
+    for key, shift, expected in (
+        (Gdk.KEY_u, False, "make <u>this</u> bold"),
+        (Gdk.KEY_e, False, "make `this` bold"),
+        (Gdk.KEY_X, True, "make ~~this~~ bold"),
+        (Gdk.KEY_H, True, "make ==this== bold"),
+    ):
+        t.clear()
+        t.type("make this bold")
+        t.go(0, 5)
+        end = window.buffer.get_iter_at_line(0)[1]
+        end.set_line_offset(9)
+        window.buffer.select_range(t.cursor(), end)
+        t.key(key, CTRL | SHIFT if shift else CTRL)
+        check(f"shortcut makes {expected!r}", t.text() == expected, repr(t.text()))
+    t.clear()
+    t.type("x")
+    t.key(Gdk.KEY_b, CTRL)
+    t.type("new")
+    check("Ctrl+B with nothing selected: type inside", t.text() == "x**new**", repr(t.text()))
+
+    # Links: Ctrl+K, styling, what is under the pointer, opening.
+    t.clear()
+    t.type("read the docs")
+    t.go(0, 9)
+    end = window.buffer.get_iter_at_line(0)[1]
+    end.set_line_offset(13)
+    window.buffer.select_range(t.cursor(), end)
+    t.key(Gdk.KEY_k, CTRL)
+    t.type("https://gnome.org")
+    check("Ctrl+K makes a link, cursor in the address",
+          t.text() == "read the [docs](https://gnome.org)", repr(t.text()))  # fmt: skip
+    window.buffer.place_cursor(window.buffer.get_end_iter())  # out of the link, then Enter
+    t.type("\n")
+    check("link text styled", "md-link" in t.tags(0, 10))
+    check("link address hidden off the cursor's line", "md-hidden" in t.tags(0, 16))
+    pump(0.2)
+    location = window.editor.get_iter_location(window.buffer.get_iter_at_line_offset(0, 11)[1])
+    url = window.editor.link_at(location.x + 1, location.y + location.height // 2)
+    check("link found under the pointer", url == "https://gnome.org", repr(url))
+    opened = []
+    window.editor.link_handler = opened.append
+    t.clear()
+    t.type("see https://example.com/page and more\n")
+    pump(0.2)
+    location = window.editor.get_iter_location(window.buffer.get_iter_at_line_offset(0, 8)[1])
+    url = window.editor.link_at(location.x + 1, location.y + location.height // 2)
+    check("bare URLs are links", url == "https://example.com/page", repr(url))
+    window.editor.link_handler = window._open_link
+    (NOTES / "Other.md").write_text("# Other\n")
+    window._open_link("Other.md")
+    pump(0.3)
+    check("a link to a note opens it here", window.session.rel == "Other.md")
+    window.new_note()
+    pump(0.3)
+
+    # Pictures: a pasted screenshot is saved next to the note and shown.
+    t.clear()
+    window.editor.note_stem = "Lecture 3"
+    t.type("before")
+    pixels = GLib.Bytes.new(bytes([200, 60, 40, 255]) * (400 * 200))
+    texture = Gdk.MemoryTexture.new(400, 200, Gdk.MemoryFormat.R8G8B8A8, pixels, 400 * 4)
+    window.editor.get_clipboard().set(texture)
+    pump(0.2)
+    window.editor.emit("paste-clipboard")
+    ok = wait(lambda: "![](attachments/" in t.text(), 3.0)
+    check("pasting a picture inserts a link", ok, repr(t.text()))
+    attachments = sorted((window.editor.base_dir / "attachments").glob("*.png"))
+    check("the picture is saved in attachments/", len(attachments) == 1, repr(attachments))
+    if attachments:
+        name = attachments[0].name
+        check("named after the note", name.startswith("Lecture-3-"), name)
+        check("link on its own line, cursor below",
+              t.text() == f"before\n![](attachments/{name})\n" and t.cursor().get_line() == 2,
+              repr(t.text()))  # fmt: skip
+        pump(0.3)
+        tags = t.tags(1, 0)
+        check("room is made below the line", any(n is None for n in tags) or len(tags) > 1)
+        y, height = window.editor.get_line_yrange(window.buffer.get_iter_at_line(1)[1])
+        check("the picture's height is reserved", height >= 200, f"line height {height}")
+        check("the link text is hidden off the cursor's line", "md-hidden" in t.tags(1, 2))
+        t.go(1, 3)
+        check("the link shows on the cursor's line", "md-markup" in t.tags(1, 2))
+    # The way a screenshot tool offers it: PNG bytes, no text.
+    png = texture.save_to_png_bytes()
+    window.editor.get_clipboard().set_content(Gdk.ContentProvider.new_for_bytes("image/png", png))
+    pump(0.2)
+    window.buffer.place_cursor(window.buffer.get_end_iter())
+    window.editor.emit("paste-clipboard")
+    ok = wait(lambda: t.text().count("![](attachments/") == 2, 3.0)
+    check("a screenshot (image/png) pastes as a picture", ok, repr(t.text()))
+    window.editor.get_clipboard().set("plain text")
+    pump(0.2)
+    t.go(0, 6)
+    window.editor.emit("paste-clipboard")
+    ok = wait(lambda: "beforeplain text" in t.text(), 2.0)
+    check("pasting text still pastes text", ok, repr(t.text()))
+
     # Input methods: while composing, Enter and Tab belong to the IME.
     t.clear()
     t.type("- 中文")
@@ -326,7 +476,11 @@ def main() -> int:
         "## Key ideas\n- Orthogonality of basis functions\n\t- sin and cos\n\t\t- deeper\n"
         "- Convergence (Dirichlet)\n\n### Steps\n1. Find the period\n2. Compute a₀\n"
         "3. Compute aₙ and bₙ\n\n- [x] Read chapter 3\n- [ ] Problem set 2\n\n"
-        "> Any periodic function can be written as a sum of sines.\n\n---\n\n"
+        "> Any periodic function can be written as a sum of sines.\n\n"
+        "**Bold**, *italic*, ~~struck~~, `inline code`, ==highlighted== and <u>underlined</u>; "
+        "see [the lecture page](https://example.edu/signals) or https://gnome.org.\n\n"
+        + (f"![](attachments/{attachments[0].name})\n" if attachments else "")
+        + "Text after the picture.\n\n---\n\n"
         "```python\nimport numpy as np\nx = np.fft.fft(signal)\n```\n"
     )
     window.buffer.place_cursor(window.buffer.get_end_iter())

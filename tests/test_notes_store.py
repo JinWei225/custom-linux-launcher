@@ -319,3 +319,16 @@ def test_notes_config():
     assert config.notes.folder == "~/Documents/Notes"
     with pytest.raises(ConfigError):
         parse_texts('[notes]\nfolder = " "', None)
+
+
+def test_move_takes_the_notes_attachments_along(store):
+    write(store, "Lecture.md", "# L\n![](attachments/shot.png)\n[pdf](attachments/s.pdf)\n")
+    write(store, "attachments/shot.png", "png")
+    write(store, "attachments/s.pdf", "pdf")
+    write(store, "attachments/other.png", "someone else's")
+    store.create_folder("", "FYP")
+    assert store.move("Lecture.md", "FYP") == "FYP/Lecture.md"
+    assert (store.root / "FYP/attachments/shot.png").read_text() == "png"
+    assert (store.root / "FYP/attachments/s.pdf").exists()
+    assert (store.root / "attachments/other.png").exists()  # not linked: stays
+    assert store.attachments_dir("FYP/Lecture.md") == store.root / "FYP/attachments"

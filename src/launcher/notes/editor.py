@@ -9,16 +9,26 @@ The buffer always holds the plain markdown. After every change each line is clas
 - "---" is drawn as a line (its text shows on the cursor's line); code blocks get a
   monospace font on a rounded background
 
+- inline **bold**, *italic*, ~~strike~~, `code`, ==highlight==, <u>underline</u> and
+  [links](url): their markers are dimmed on the cursor's line and hidden elsewhere
+- a line holding only an image, ![](attachments/x.png), shows the picture below it
+
 Typing rules live in on_key: Enter continues a list (and ends it on an empty item), Tab /
 Shift+Tab indent list items, Backspace at the start of an item or heading removes its
-marker, Ctrl+Enter or a click toggles a checkbox. "[] " becomes a checkbox, and ordered
-lists renumber themselves. Those edits happen inside the same user action as the
-keystroke, so one Ctrl+Z undoes both.
+marker, Ctrl+Enter or a click toggles a checkbox, Ctrl+B/I/U/E, Ctrl+Shift+X/H and Ctrl+K
+wrap the selection in a style or link. "[] " becomes a checkbox, and ordered lists
+renumber themselves. Those edits happen inside the same user action as the keystroke,
+so one Ctrl+Z undoes both. Pasting a picture saves it in attachments/ next to the note.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import unquote
 
 import gi
 
@@ -27,7 +37,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Graphene", "1.0")
 gi.require_version("Gsk", "4.0")
-from gi.repository import Adw, Gdk, GLib, Graphene, Gsk, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gdk, GLib, GObject, Graphene, Gsk, Gtk, Pango  # noqa: E402
 
 from .. import notes_markdown as md  # noqa: E402
 
@@ -41,11 +51,30 @@ CODE_INSET = 14
 CHECKBOX = 15
 BULLETS = ("•", "◦", "▪")
 HEADING_SCALES = {1: 1.6, 2: 1.35, 3: 1.15}
+MAX_IMAGE_HEIGHT = 600
+IMAGE_GAP = (4, 10)  # space above and below a picture
+LINK_KINDS = ("link", "url", "image")
+SHORTCUTS = {  # (key, with shift) -> style
+    (Gdk.KEY_b, False): "bold",
+    (Gdk.KEY_i, False): "italic",
+    (Gdk.KEY_u, False): "underline",
+    (Gdk.KEY_e, False): "code",
+    (Gdk.KEY_x, True): "strike",
+    (Gdk.KEY_h, True): "highlight",
+}
 _ENTER = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter)
 
 
 def _rect(x: float, y: float, w: float, h: float) -> Graphene.Rect:
     return Graphene.Rect().init(x, y, w, h)
+
+
+def _offers_picture(formats: Gdk.ContentFormats) -> bool:
+    """A clipboard holding a picture: image/* data from another app (a screenshot), or a
+    texture object from this one (whose type is a subclass such as GdkMemoryTexture)."""
+    if any(m.startswith("image/") for m in formats.get_mime_types() or ()):
+        return True
+    return any(GObject.type_is_a(t, Gdk.Texture.__gtype__) for t in formats.get_gtypes() or ())
 
 
 def _rgba(spec: str) -> Gdk.RGBA:
@@ -78,6 +107,15 @@ class MarkdownEditor(Gtk.TextView):
         self._preedit = False
         self._checkboxes: dict[int, Graphene.Rect] = {}  # line -> drawn box (buffer coords)
         self._bullets: dict[int, float] = {}  # line -> baseline the bullet was drawn on
+        # Set by the window for the open note: where its pictures are, what to call new
+        # ones, and what to do with Ctrl+clicked links and errors.
+        self.base_dir: Path | None = None
+        self.note_stem = "image"
+        self.link_handler: Callable[[str], None] | None = None
+        self.error_handler: Callable[[str], None] | None = None
+        self._textures: dict[Path, tuple[float, Gdk.Texture | None]] = {}
+        self._image_tags: dict[int, Gtk.TextTag] = {}
+        self._column = MAX_TEXT_WIDTH
         self._create_tags()
         # Start of the line whose heading/rule markup is shown (the cursor's line). A mark
         # rather than a number, so it stays on that line when lines are added above it.
@@ -103,9 +141,13 @@ class MarkdownEditor(Gtk.TextView):
         click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         click.connect("pressed", self._on_click)
         self.add_controller(click)
+        self.set_has_tooltip(True)
+        self.connect("query-tooltip", self._on_query_tooltip)
+        self.connect("paste-clipboard", self._on_paste)
         style = Adw.StyleManager.get_default()
         # Colours follow the theme; the new CSS applies a moment after the switch.
         style.connect("notify::dark", lambda *_a: GLib.idle_add(self._update_colors))
+        style.connect("notify::accent-color", lambda *_a: GLib.idle_add(self._update_colors))
         self.connect("realize", lambda *_a: self._update_colors())
         self._update_colors()
 
@@ -137,6 +179,19 @@ class MarkdownEditor(Gtk.TextView):
         self.t_fence = tag("md-fence", family="monospace", scale=0.85)
         self.t_done = tag("md-done", strikethrough=True)
         self.t_number = tag("md-number", weight=Pango.Weight.BOLD)
+        self.t_inline = {
+            "bold": tag("md-bold", weight=Pango.Weight.BOLD),
+            "italic": tag("md-italic", style=Pango.Style.ITALIC),
+            "strike": tag("md-strike", strikethrough=True),
+            "code": tag("md-inline-code", family="monospace", scale=0.92),
+            "highlight": tag("md-highlight"),
+            "underline": tag("md-underline", underline=Pango.Underline.SINGLE),
+            "link": tag("md-link", underline=Pango.Underline.SINGLE),
+        }
+        for kind in ("url", "image"):
+            self.t_inline[kind] = self.t_inline["link"]
+        # A line whose only text is a hidden image link: make its text row tiny.
+        self.t_image_row = tag("md-image-row", size_points=1)
         self._apply_margins()
 
     def _apply_margins(self) -> None:
@@ -159,6 +214,16 @@ class MarkdownEditor(Gtk.TextView):
             t.set_property("foreground-rgba", dim)
         for t in self.t_quote:
             t.set_property("foreground-rgba", soft)
+        faint = Gdk.RGBA()
+        faint.red, faint.green, faint.blue, faint.alpha = fg.red, fg.green, fg.blue, 0.09
+        self.t_inline["code"].set_property("background-rgba", faint)
+        dark = Adw.StyleManager.get_default().get_dark()
+        self.t_inline["highlight"].set_property(
+            "background-rgba",
+            _rgba("rgba(255, 200, 0, 0.30)" if dark else "rgba(255, 214, 0, 0.45)"),
+        )
+        accent = Adw.StyleManager.get_default().get_accent_color_rgba()
+        self.t_inline["link"].set_property("foreground-rgba", accent)
         self.queue_draw()
         return GLib.SOURCE_REMOVE
 
@@ -166,14 +231,18 @@ class MarkdownEditor(Gtk.TextView):
 
     def do_size_allocate(self, width: int, height: int, baseline: int) -> None:
         margin = max(MIN_MARGIN, (width - MAX_TEXT_WIDTH) // 2)
-        if margin != self._margin and not self._pending_margin:
+        column = width - 2 * margin
+        if (margin, column) != (self._margin, self._column) and not self._pending_margin:
             # Changing margins inside an allocation would re-enter it: do it next frame.
             def apply() -> bool:
                 self._pending_margin = 0
-                self._margin = margin
+                self._margin, self._column = margin, column
                 self.set_left_margin(margin)
                 self.set_right_margin(margin)
                 self._apply_margins()
+                for n, info in enumerate(self._infos):  # pictures fit the new column
+                    if info.kind == "image":
+                        self._style_line(n)
                 return GLib.SOURCE_REMOVE
 
             self._pending_margin = GLib.idle_add(apply)
@@ -311,6 +380,24 @@ class MarkdownEditor(Gtk.TextView):
             span(self.t_fence, 0)
         elif kind == "code":
             span(self.t_code, 0)
+        elif kind == "image":
+            texture = self._texture(info.url)
+            if texture is not None:
+                _w, h = self._image_size(texture)
+                span(self._image_tag(h), 0)
+            if texture is None or on_cursor:
+                span(self.t_markup, 0, info.marker)  # the link itself, to edit it
+            else:
+                span(self.t_hidden, 0, info.marker)
+                span(self.t_image_row, 0)
+        if kind not in ("code", "fence", "rule", "image", "blank"):
+            marker = self.t_markup if on_cursor else self.t_hidden
+            for sp in md.inline_spans(self._lines[line], info.content):
+                span(self.t_inline[sp.kind], sp.inner_start, sp.inner_end)
+                if sp.start < sp.inner_start:
+                    span(marker, sp.start, sp.inner_start)
+                if sp.inner_end < sp.end:
+                    span(marker, sp.inner_end, sp.end)
 
     def _on_cursor_moved(self, *_args) -> None:
         if self.buffer.get_line_count() != len(self._infos):
@@ -319,14 +406,15 @@ class MarkdownEditor(Gtk.TextView):
         self._keep_cursor_out_of_markers(self._cursor())
 
     def _sync_cursor_markup(self) -> None:
-        """Show heading/rule markup on the cursor's line only."""
+        """Show markup (headings, rules, inline styles, image links) on the cursor's
+        line only."""
         line = self._cursor().get_line()
         shown = self.buffer.get_iter_at_mark(self._shown).get_line()
         self._cursor_line = line
         if shown == line:
             return
         for n in (shown, line):
-            if 0 <= n < len(self._infos) and self._infos[n].kind in ("heading", "rule"):
+            if 0 <= n < len(self._infos) and self._infos[n].kind not in ("code", "fence"):
                 self._style_line(n)
         self.buffer.move_mark(self._shown, self._line_start(line))
 
@@ -428,6 +516,15 @@ class MarkdownEditor(Gtk.TextView):
         ctrl = mods == Gdk.ModifierType.CONTROL_MASK
         if keyval in _ENTER and ctrl:
             return self.toggle_task(self._cursor().get_line())
+        ctrl_shift = mods == Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        if ctrl or ctrl_shift:
+            style = SHORTCUTS.get((Gdk.keyval_to_lower(keyval), ctrl_shift))
+            if style is not None:
+                self.wrap_selection(style)
+                return True
+            if ctrl and Gdk.keyval_to_lower(keyval) == Gdk.KEY_k:
+                self.insert_link()
+                return True
         if keyval in _ENTER and not mods:
             return self._enter()
         if keyval == Gdk.KEY_Tab and not mods:
@@ -518,6 +615,48 @@ class MarkdownEditor(Gtk.TextView):
             self._user_edit(lambda: self._set_line(line, new, 0))
         return True
 
+    def _select(self, line: int, a: int, z: int) -> None:
+        start = self._line_start(line)
+        start.set_line_offset(a)
+        end = self._line_start(line)
+        end.set_line_offset(z)
+        self.buffer.select_range(start, end)
+
+    def wrap_selection(self, style: str) -> None:
+        """Ctrl+B and friends: wrap the selection in a style (or unwrap it)."""
+        bounds = self.buffer.get_selection_bounds()
+        a, z = bounds if bounds else (self._cursor(), self._cursor())
+        if a.get_line() != z.get_line():
+            return  # styles don't span lines in markdown
+        line, text = a.get_line(), self.line_text(a.get_line())
+        new, s, e = md.toggle_wrap(text, a.get_line_offset(), z.get_line_offset(), style)
+
+        def edit() -> None:
+            self._set_line(line, new)
+            self._select(line, s, e)
+
+        self._user_edit(edit)
+
+    def insert_link(self) -> None:
+        """Ctrl+K: [selection](|), or [|](url) when a URL is selected."""
+        bounds = self.buffer.get_selection_bounds()
+        a, z = bounds if bounds else (self._cursor(), self._cursor())
+        if a.get_line() != z.get_line():
+            return
+        line, text = a.get_line(), self.line_text(a.get_line())
+        i, j = a.get_line_offset(), z.get_line_offset()
+        chosen = text[i:j]
+        if chosen.startswith(("http://", "https://", "www.")):
+            new, cursor = f"{text[:i]}[]({chosen}){text[j:]}", i + 1
+        else:
+            new, cursor = f"{text[:i]}[{chosen}](){text[j:]}", i + len(chosen) + 3
+
+        def edit() -> None:
+            self._set_line(line, new)
+            self._select(line, cursor, cursor)
+
+        self._user_edit(edit)
+
     def toggle_task(self, line: int) -> bool:
         if not 0 <= line < len(self._infos) or self._infos[line].kind != "task":
             return False
@@ -537,6 +676,12 @@ class MarkdownEditor(Gtk.TextView):
 
     def _on_click(self, gesture: Gtk.GestureClick, _n: int, x: float, y: float) -> None:
         bx, by = self.window_to_buffer_coords(Gtk.TextWindowType.WIDGET, int(x), int(y))
+        state = gesture.get_current_event_state()
+        if state & Gdk.ModifierType.CONTROL_MASK and (url := self.link_at(bx, by)):
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            if self.link_handler is not None:
+                self.link_handler(url)
+            return
         for line, box in self._checkboxes.items():
             pad = 4  # a slightly bigger target than the drawn box
             if box.get_x() - pad <= bx <= box.get_x() + box.get_width() + pad and (
@@ -545,6 +690,129 @@ class MarkdownEditor(Gtk.TextView):
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 self.toggle_task(line)
                 return
+
+    def link_at(self, bx: int, by: int) -> str | None:
+        """The URL of the link (or picture) at a point in buffer coordinates."""
+        ok, it = self.get_iter_at_location(bx, by)
+        if not ok:
+            return None
+        line, col = it.get_line(), it.get_line_offset()
+        if line >= len(self._infos):
+            return None
+        info = self._infos[line]
+        if info.kind == "image":
+            return info.url
+        if info.kind in ("code", "fence"):
+            return None
+        for sp in md.inline_spans(self._lines[line], info.content):
+            if sp.kind in LINK_KINDS and sp.start <= col < sp.end:
+                return sp.url
+        return None
+
+    def _on_query_tooltip(self, _view, x: int, y: int, keyboard: bool, tooltip) -> bool:
+        if keyboard:
+            return False
+        bx, by = self.window_to_buffer_coords(Gtk.TextWindowType.WIDGET, x, y)
+        url = self.link_at(bx, by)
+        if url is None:
+            return False
+        tooltip.set_text(f"{url}\nCtrl+click to open")
+        return True
+
+    # --- pictures ------------------------------------------------------------------------
+
+    def image_path(self, url: str) -> Path | None:
+        """A picture's file, for a path relative to the note (not for web images)."""
+        if self.base_dir is None or "://" in url or url.startswith(("www.", "mailto:")):
+            return None
+        path = Path(unquote(url))
+        return path if path.is_absolute() else self.base_dir / path
+
+    def _texture(self, url: str) -> Gdk.Texture | None:
+        path = self.image_path(url)
+        if path is None:
+            return None
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+        cached = self._textures.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        try:
+            texture = Gdk.Texture.new_from_filename(str(path))
+        except GLib.Error as e:
+            log.warning("cannot show %s: %s", path, e.message)
+            texture = None
+        self._textures[path] = (mtime, texture)
+        return texture
+
+    def _image_size(self, texture: Gdk.Texture) -> tuple[int, int]:
+        """Shown size: the natural size, scaled down to fit the column and height cap."""
+        w, h = texture.get_width(), texture.get_height()
+        scale = min(1.0, max(self._column, 100) / w, MAX_IMAGE_HEIGHT / h)
+        return max(1, round(w * scale)), max(1, round(h * scale))
+
+    def _image_tag(self, height: int) -> Gtk.TextTag:
+        """A tag that leaves room for a picture of this height below its line."""
+        tag = self._image_tags.get(height)
+        if tag is None:
+            tag = self.buffer.create_tag(None, pixels_below_lines=height + sum(IMAGE_GAP))
+            self._image_tags[height] = tag
+            self._tags.append(tag)
+        return tag
+
+    def _on_paste(self, _view: Gtk.TextView) -> None:
+        """Ctrl+V of a picture (a screenshot): save it next to the note and link it.
+        Anything with text in it pastes as usual."""
+        clipboard = self.get_clipboard()
+        formats = clipboard.get_formats()
+        has_text = formats.contain_mime_type("text/plain") or formats.contain_mime_type(
+            "text/plain;charset=utf-8"
+        )
+        if has_text or not _offers_picture(formats):
+            return
+        self.stop_emission_by_name("paste-clipboard")
+        clipboard.read_texture_async(None, self._on_pasted_texture)
+
+    def _on_pasted_texture(self, clipboard: Gdk.Clipboard, result) -> None:
+        try:
+            texture = clipboard.read_texture_finish(result)
+        except GLib.Error as e:
+            self._error(f"Could not paste the picture: {e.message}")
+            return
+        if texture is None:
+            return
+        try:
+            link = self.save_picture(texture)
+        except OSError as e:
+            self._error(f"Could not save the picture: {e}")
+            return
+        self.insert_picture_link(link)
+
+    def save_picture(self, texture: Gdk.Texture) -> str:
+        """Save a picture to attachments/ next to the note; returns its link path."""
+        if self.base_dir is None:
+            raise OSError("no note is open")
+        directory = self.base_dir / md.ATTACHMENTS
+        directory.mkdir(parents=True, exist_ok=True)
+        taken = set(os.listdir(directory))
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        name = md.attachment_name(self.note_stem, stamp, taken)
+        if not texture.save_to_png(str(directory / name)):
+            raise OSError(f"writing {name} failed")
+        return f"{md.ATTACHMENTS}/{name}"
+
+    def insert_picture_link(self, link: str) -> None:
+        """Put ![](link) on a line of its own at the cursor; the cursor goes below it."""
+        cursor = self._cursor()
+        before = "" if cursor.starts_line() else "\n"
+        self._user_edit(lambda: self.buffer.insert_at_cursor(f"{before}![]({link})\n"))
+
+    def _error(self, message: str) -> None:
+        log.error("%s", message)
+        if self.error_handler is not None:
+            self.error_handler(message)
 
     # --- drawing -------------------------------------------------------------------------
 
@@ -582,6 +850,14 @@ class MarkdownEditor(Gtk.TextView):
                 for d in range(info.depth):
                     x = self._margin + d * QUOTE_STEP + 2
                     snapshot.append_color(accent if d == 0 else dim, _rect(x, y, 3, height))
+            elif info.kind == "image" and (texture := self._texture(info.url)) is not None:
+                w, h = self._image_size(texture)
+                box = _rect(self._margin, y + height - h - IMAGE_GAP[1], w, h)
+                rounded = Gsk.RoundedRect()
+                rounded.init_from_rect(box, 6)
+                snapshot.push_rounded_clip(rounded)
+                snapshot.append_texture(texture, box)
+                snapshot.pop()
             elif info.kind == "rule" and line != self._cursor_line:
                 mid = y + (height - self.get_pixels_below_lines()) / 2
                 snapshot.append_color(dim, _rect(self._margin, mid, width - 2 * self._margin, 1))

@@ -181,3 +181,107 @@ def test_renumber_keeps_start_and_restarts_after_bullets():
 def test_bare_quote_marker_continues_a_quote_only():
     kinds = [i.kind for i in classify(["> first", ">", "> second", "", ">"])]
     assert kinds == ["quote", "quote", "quote", "blank", "text"]
+
+
+# --- inline styles ---------------------------------------------------------------------
+
+from launcher.notes_markdown import (  # noqa: E402
+    attachment_links,
+    attachment_name,
+    inline_spans,
+    toggle_wrap,
+)
+
+
+def styles(text: str, start: int = 0) -> list[tuple[str, str]]:
+    return [(s.kind, text[s.inner_start : s.inner_end]) for s in inline_spans(text, start)]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("**bold**", [("bold", "bold")]),
+        ("__bold__", [("bold", "bold")]),
+        ("*italic*", [("italic", "italic")]),
+        ("_italic_", [("italic", "italic")]),
+        ("~~gone~~", [("strike", "gone")]),
+        ("`x = 1`", [("code", "x = 1")]),
+        ("``a ` b``", [("code", "a ` b")]),
+        ("==key==", [("highlight", "key")]),
+        ("<u>under</u>", [("underline", "under")]),
+        ("***both***", [("bold", "both"), ("italic", "both")]),
+        ("**bold *and italic***", [("bold", "bold *and italic*"), ("italic", "and italic")]),
+        ("a **b** c *d* e", [("bold", "b"), ("italic", "d")]),
+        # not styles
+        ("**not closed", []),
+        ("** spaced **", []),
+        ("snake_case_name", []),
+        ("2 * 3 * 4", []),
+        ("\\*escaped\\*", []),
+        ("~single~", []),
+        ("a == b", []),
+        ("****", []),
+        # nothing inside code is styled
+        ("`**not bold**`", [("code", "**not bold**")]),
+    ],
+)
+def test_inline_styles(text, expected):
+    assert styles(text) == expected
+
+
+def test_links_and_urls():
+    text = "see [the docs](https://gnome.org/a) or https://example.com/x. (www.b.org)"
+    spans = inline_spans(text)
+    assert [(s.kind, text[s.inner_start : s.inner_end], s.url) for s in spans] == [
+        ("link", "the docs", "https://gnome.org/a"),
+        ("url", "https://example.com/x", "https://example.com/x"),
+        ("url", "www.b.org", "https://www.b.org"),
+    ]
+    link = spans[0]
+    assert text[link.start : link.inner_start] == "[" and text[link.inner_end : link.end] == (
+        "](https://gnome.org/a)"
+    )
+    assert styles("[**bold** link](u)") == [("link", "**bold** link"), ("bold", "bold")]
+    assert styles("<https://a.b/c>") == [("url", "https://a.b/c")]
+    assert styles("[x](<a b.md>)")[0] == ("link", "x")
+    assert inline_spans("[x](<a b.md>)")[0].url == "a b.md"
+    assert styles("![alt](pic.png) text") == [("image", "alt")]
+
+
+def test_inline_start_column_skips_markers():
+    # In "* item *x*" the list bullet "* " must not pair with a later "*".
+    assert styles("* item *x*", start=2) == [("italic", "x")]
+
+
+def test_image_lines():
+    info = classify(["![](attachments/a.png)"])[0]
+    assert (info.kind, info.url) == ("image", "attachments/a.png")
+    assert classify(["  ![shot](<attachments/a b.png>)  "])[0].url == "attachments/a b.png"
+    assert classify(["text ![](a.png)"])[0].kind == "text"
+    assert classify(["![](a b.png)"])[0].kind == "text"  # a space needs <...>
+
+
+@pytest.mark.parametrize(
+    "text, a, z, kind, expected",
+    [
+        ("make this bold", 5, 9, "bold", ("make **this** bold", 7, 11)),
+        ("make **this** bold", 7, 11, "bold", ("make this bold", 5, 9)),  # unwrap
+        ("make **this** bold", 5, 13, "bold", ("make this bold", 5, 9)),  # markers selected
+        ("word", 0, 4, "italic", ("*word*", 1, 5)),
+        ("**word**", 2, 6, "italic", ("***word***", 3, 7)),  # bold, not italic: wrap
+        ("x", 1, 1, "code", ("x``", 2, 2)),  # nothing selected: empty markers
+        ("u", 0, 1, "underline", ("<u>u</u>", 3, 4)),
+    ],
+)
+def test_toggle_wrap(text, a, z, kind, expected):
+    assert toggle_wrap(text, a, z, kind) == expected
+
+
+def test_attachment_names_and_links():
+    assert attachment_name("Lecture 3", "20260928-1213", set()) == "Lecture-3-20260928-1213.png"
+    taken = {"Lecture-3-20260928-1213.png"}
+    assert attachment_name("Lecture 3", "20260928-1213", taken) == "Lecture-3-20260928-1213-2.png"
+    assert attachment_name("中文 笔记", "1", set()) == "中文-笔记-1.png"
+    assert attachment_name("???", "1", set()) == "image-1.png"
+    text = "![](attachments/a.png)\n[doc](attachments/b.pdf) ![](other/c.png) ![](https://x/y.png)"
+    assert attachment_links(text) == ["attachments/a.png", "attachments/b.pdf"]

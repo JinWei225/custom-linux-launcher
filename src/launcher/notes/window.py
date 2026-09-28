@@ -142,6 +142,8 @@ class NotesWindow(Adw.ApplicationWindow):
         self._banner.connect("button-clicked", lambda _b: self._reload_from_disk())
 
         self.editor = MarkdownEditor()
+        self.editor.link_handler = self._open_link
+        self.editor.error_handler = self.toast
         self.buffer = self.editor.buffer
         self.buffer.connect("changed", self._on_changed)
         scroller = Gtk.ScrolledWindow(child=self.editor, vexpand=True)
@@ -368,10 +370,16 @@ class NotesWindow(Adw.ApplicationWindow):
         return self.editor.text()  # the plain markdown, hidden markers included
 
     def _update_title(self) -> None:
+        """Header title, and where the editor finds (and saves) this note's pictures.
+        Called whenever the open note is opened, renamed or moved."""
         if self.session is None:
             self._title.set_title("Notes")
             self._title.set_subtitle("")
+            self.editor.base_dir = None
             return
+        path = self.store.path(self.session.rel)
+        self.editor.base_dir = path.parent
+        self.editor.note_stem = path.stem
         self._title.set_title(self.session.title)
         folder = str(Path(self.session.rel).parent)
         self._title.set_subtitle("" if folder == "." else folder)
@@ -610,6 +618,23 @@ class NotesWindow(Adw.ApplicationWindow):
 
         dialog.connect("response", response)
         dialog.present(self)
+
+    def _open_link(self, url: str) -> None:
+        """Ctrl+click: web links in the browser, other notes here, files in their app."""
+        if "://" in url or url.startswith(("mailto:", "www.")):
+            web = url if not url.startswith("www.") else "https://" + url
+            Gtk.UriLauncher.new(web).launch(self, None, None)
+            return
+        path = self.editor.image_path(url)
+        if path is None or not path.exists():
+            self.toast(f"“{url}” doesn't exist")
+            return
+        root = self.store.root.resolve()
+        resolved = path.resolve()
+        if resolved.suffix.lower() == ".md" and root in resolved.parents:
+            self.open_note(resolved.relative_to(root).as_posix())
+            return
+        Gtk.FileLauncher.new(Gio.File.new_for_path(str(resolved))).launch(self, None, None)
 
     def _open_notes_folder(self) -> None:
         Gtk.FileLauncher.new(Gio.File.new_for_path(str(self.store.root))).launch(self)
