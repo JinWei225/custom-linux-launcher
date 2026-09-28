@@ -1,5 +1,5 @@
 """The Launcher Settings window: General, Shortcuts, Apps, Quicklinks, Snippets,
-Clipboard and Files pages.
+Clipboard, Files and Converters pages.
 
 All changes go through ConfigWriter, which validates the whole config before writing,
 so nothing done here can leave config.toml broken. The running launcher picks the
@@ -21,13 +21,14 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from .. import APP_ID, OBJECT_PATH, launching, paths, shortcuts  # noqa: E402
+from .. import APP_ID, OBJECT_PATH, currency, launching, paths, shortcuts  # noqa: E402
 from ..clipboard_store import read_counts  # noqa: E402
 from ..config import Config, ConfigError  # noqa: E402
 from ..config_writer import ConfigWriter  # noqa: E402
 from ..favicons import domain_of  # noqa: E402
 from ..importers import espanso_base, import_espanso, read_espanso  # noqa: E402
 from ..providers.apps import AppEntry, load_apps  # noqa: E402
+from ..timezones import system_zone  # noqa: E402
 from .dialogs import (  # noqa: E402
     AppDialog,
     AppPickerDialog,
@@ -49,7 +50,7 @@ RELOAD_DELAY_MS = 300
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
         super().__init__(application=app, title="Launcher Settings")
-        self.set_default_size(1000, 720)
+        self.set_default_size(1140, 720)  # wide enough for all 8 page names
         self.writer = ConfigWriter(paths.config_file())
         self.config = Config()
         self._apps: list[AppEntry] | None = None
@@ -78,6 +79,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             SnippetsPage(self),
             ClipboardPage(self),
             FilesPage(self),
+            ConvertersPage(self),
         ]
         for page in self._pages:
             self._stack.add_titled_with_icon(page, page.key, page.get_title(), page.get_icon_name())
@@ -778,21 +780,14 @@ class ClipboardPage(_Page):
 
     def _clear(self, seconds: int) -> None:
         """Ask the running launcher to delete: it owns the history and its open views."""
-        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        params = GLib.Variant("(sava{sv})", ("clear-clipboard", [GLib.Variant("x", seconds)], {}))
 
-        def done(connection, result) -> None:
-            try:
-                connection.call_finish(result)
-            except GLib.Error:
+        def done(running: bool) -> None:
+            if not running:
                 self.window.toast("The launcher isn't running, so nothing was deleted.")
                 return
             GLib.timeout_add(300, lambda: (self._update_count(), GLib.SOURCE_REMOVE)[1])
 
-        bus.call(
-            APP_ID, OBJECT_PATH, "org.gtk.Actions", "Activate", params, None,
-            Gio.DBusCallFlags.NONE, 5000, None, done,
-        )  # fmt: skip
+        activate_launcher_action("clear-clipboard", done, GLib.Variant("x", seconds))
 
     # --- app lists -----------------------------------------------------------------------
 
@@ -829,3 +824,166 @@ class ClipboardPage(_Page):
         entry.connect("apply", lambda e: add(e.get_text()))
         group.add(entry)
         return group
+
+
+def activate_launcher_action(name: str, done: Callable[[bool], None], *args: GLib.Variant) -> None:
+    """Run one of the running launcher's actions; done(False) if it isn't running."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    params = GLib.Variant("(sava{sv})", (name, list(args), {}))
+
+    def finish(connection, result) -> None:
+        try:
+            connection.call_finish(result)
+        except GLib.Error:
+            done(False)
+            return
+        done(True)
+
+    bus.call(
+        APP_ID, OBJECT_PATH, "org.gtk.Actions", "Activate", params, None,
+        Gio.DBusCallFlags.NONE, 5000, None, finish,
+    )  # fmt: skip
+
+
+class ConvertersPage(_Page):
+    key = "converters"
+    RATES_RECHECK_MS = (1000, 3000, 8000)  # after "Refresh Now": look for the new file
+
+    def __init__(self, window: SettingsWindow) -> None:
+        super().__init__(window, "Converters", "accessories-calculator-symbolic")
+        answers = Adw.PreferencesGroup(
+            title="Answers in the Launcher",
+            description="Type these in the main launcher: Enter copies the answer, Alt+Enter "
+            "pastes it into the window you came from. Times follow the top bar clock's "
+            "12/24-hour setting.",
+        )
+        self._switches = {}
+        for key, title, examples in (
+            ("dates", "Dates", "tomorrow · two months after today · days until christmas"),
+            ("timezones", "Timezones", "time in tokyo · 3pm tokyo · 3pm pst to london"),
+            ("currency", "Currency", "100 usd · 1.5k jpy to myr · 50 ringgit in won"),
+        ):
+            row = switch_row(title=title, subtitle=examples)
+            row.connect("notify::active", self._on_switch, key)
+            answers.add(row)
+            self._switches[key] = row
+        self.add(answers)
+
+        money = Adw.PreferencesGroup(title="Currency")
+        self._codes: list[str] = []
+        self._home = Adw.ComboRow(title="Home Currency", enable_search=True)
+        self._home.set_subtitle("What “100 usd” is converted to; automatic follows your timezone")
+        self._home.connect("notify::selected", self._on_home)
+        money.add(self._home)
+        self._refresh_hours = Adw.SpinRow.new_with_range(1, 168, 1)
+        self._refresh_hours.set_title("Download New Rates Every")
+        self._refresh_hours.set_subtitle("Hours; the rates change once a day")
+        self._refresh_hours.connect("notify::value", self._on_refresh_hours)
+        money.add(self._refresh_hours)
+        self._rates_row = action_row(title="Exchange Rates")
+        self._rates_row.add_css_class("property")
+        self._refresh_button = Gtk.Button(label="Refresh Now", valign=Gtk.Align.CENTER)
+        self._refresh_button.connect("clicked", lambda _b: self._refresh_rates())
+        self._rates_row.add_suffix(self._refresh_button)
+        money.add(self._rates_row)
+        source = action_row(
+            title="Rates by ExchangeRate-API",
+            subtitle="open.er-api.com: free, no account; your amounts are never sent",
+        )
+        link = Gtk.Button(
+            icon_name="adw-external-link-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text=currency.ATTRIBUTION_URL,
+        )
+        link.add_css_class("flat")
+        link.connect(
+            "clicked", lambda _b: Gtk.UriLauncher.new(currency.ATTRIBUTION_URL).launch(window)
+        )
+        source.add_suffix(link)
+        money.add(source)
+        self.add(money)
+
+    def refresh(self, config: Config) -> None:
+        self._loading = True
+        c = config.converters
+        for key, row in self._switches.items():
+            row.set_active(getattr(c, key))
+        rates = self._read_rates()
+        codes = sorted(rates.rates) if rates else sorted(currency.COUNTRY_CURRENCY.values())
+        home = c.home_currency.upper()
+        if home and home not in codes:
+            codes = sorted({*codes, home})
+        if codes != self._codes:
+            self._codes = codes
+            auto = currency.home_currency("", getattr(system_zone(), "key", None))
+            labels = [f"Automatic ({auto})", *codes]
+            self._home.set_model(Gtk.StringList.new(labels))
+        self._home.set_selected(codes.index(home) + 1 if home else 0)
+        self._refresh_hours.set_value(c.refresh_hours)
+        self._home.set_sensitive(c.currency)
+        self._refresh_hours.set_sensitive(c.currency)
+        self._loading = False
+        self._show_rates(rates)
+
+    def _on_switch(self, row: Adw.SwitchRow, _pspec, key: str) -> None:
+        value = row.get_active()
+        self._save_now(lambda w: w.set_value("converters", key, value))
+
+    def _on_home(self, row: Adw.ComboRow, _pspec) -> None:
+        index = row.get_selected()
+        if index == Gtk.INVALID_LIST_POSITION:
+            return
+        code = self._codes[index - 1] if index > 0 else ""
+        self._save_now(lambda w: w.set_value("converters", "home_currency", code))
+
+    def _on_refresh_hours(self, row: Adw.SpinRow, _pspec) -> None:
+        value = int(row.get_value())
+        self._save_later(
+            "refresh_hours", lambda w: w.set_value("converters", "refresh_hours", value)
+        )
+
+    @staticmethod
+    def _read_rates() -> currency.Rates | None:
+        try:
+            return currency.Rates.from_json(paths.rates_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _show_rates(self, rates: currency.Rates | None) -> None:
+        if rates is None:
+            self._rates_row.set_subtitle("Not downloaded yet")
+            return
+        now = time.time()
+        fetched = GLib.DateTime.new_from_unix_local(int(rates.fetched)).format("%-d %b %H:%M")
+        self._rates_row.set_subtitle(
+            f"{len(rates.rates)} currencies · published {currency.age(rates.updated, now)}"
+            f" · downloaded {fetched}"
+        )
+
+    def _refresh_rates(self) -> None:
+        """Ask the running launcher to download: it owns the rates cache."""
+        before = self._read_rates()
+        self._refresh_button.set_sensitive(False)
+
+        def recheck(remaining: tuple[int, ...]) -> bool:
+            rates = self._read_rates()
+            if rates is not None and (before is None or rates.fetched > before.fetched):
+                self._show_rates(rates)
+                self._refresh_button.set_sensitive(True)
+                self.window.toast("Exchange rates updated")
+            elif remaining:
+                GLib.timeout_add(remaining[0], recheck, remaining[1:])
+            else:
+                self._refresh_button.set_sensitive(True)
+                self.window.toast("Could not download exchange rates (offline?)")
+            return GLib.SOURCE_REMOVE
+
+        def done(running: bool) -> None:
+            if not running:
+                self._refresh_button.set_sensitive(True)
+                self.window.toast("The launcher isn't running, so nothing was downloaded.")
+                return
+            delays = self.RATES_RECHECK_MS
+            GLib.timeout_add(delays[0], recheck, delays[1:])
+
+        activate_launcher_action("refresh-rates", done)

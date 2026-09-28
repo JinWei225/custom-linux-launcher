@@ -108,7 +108,7 @@ class LauncherApp(Adw.Application):
             call_soon=lambda fn: GLib.idle_add(lambda: (fn(), GLib.SOURCE_REMOVE)[1]),
         )
         self._rates = RatesCache(
-            paths.cache_dir() / "rates.json",
+            paths.rates_file(),
             on_update=lambda: self.window and self.window.refresh_if_visible(),
             call_soon=lambda fn: GLib.idle_add(lambda: (fn(), GLib.SOURCE_REMOVE)[1]),
         )
@@ -196,6 +196,7 @@ class LauncherApp(Adw.Application):
             ("show", "s", lambda p: self._show(self._mode(p), toggle=False)),
             ("toggle", "s", lambda p: self._show(self._mode(p), toggle=True)),
             ("toggle-clipboard-pause", None, lambda p: self.toggle_clipboard_pause()),
+            ("refresh-rates", None, lambda p: self._rates.refresh()),  # Settings' button
             # Seconds of recent history to delete (pinned entries kept); 0 = everything.
             ("clear-clipboard", "x", lambda p: self.clear_clipboard(p.get_int64())),
             ("hide", None, lambda p: self.window.hide_launcher()),

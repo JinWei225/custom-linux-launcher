@@ -25,6 +25,11 @@ def cache_dir() -> Path:
     return _xdg("XDG_CACHE_HOME", ".cache") / "launcher"
 
 
+def rates_file() -> Path:
+    """Exchange rates downloaded for the currency converter."""
+    return cache_dir() / "rates.json"
+
+
 def espanso_match_dir() -> Path:
     """Where espanso reads its snippets from (its default location)."""
     return _xdg("XDG_CONFIG_HOME", ".config") / "espanso" / "match"

@@ -34,6 +34,7 @@ RATES = Path(os.environ["XDG_CACHE_HOME"]) / "launcher" / "rates.json"
 TEST_APP_ID = "io.github.jinwei.LauncherNestedTest"
 
 results: list[tuple[str, bool]] = []
+rates_written = 0.0  # "fetched" time of the rates.json seeded before the daemon starts
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -116,6 +117,8 @@ def main() -> int:
     RATES.parent.mkdir(parents=True, exist_ok=True)
     RATES.write_text(json.dumps({"updated": time.time(), "fetched": time.time(),
                                  "rates": {"USD": 1, "MYR": 4, "JPY": 150}}))  # fmt: skip
+    global rates_written
+    rates_written = json.loads(RATES.read_text())["fetched"]
     daemon_log = open(Path(os.environ["XDG_CACHE_HOME"]) / "daemon.log", "w")
     daemon = subprocess.Popen(
         [LAUNCHER, "--daemon", "--debug"], stdout=daemon_log, stderr=daemon_log
@@ -269,6 +272,14 @@ def run(daemon_log: str) -> int:
     app.read(0.5)
     got = app.last("clipboard") or {}
     check("Enter copies a currency answer", got.get("text") == "225000", repr(got))
+    # Settings' "Refresh Now": the daemon downloads (or, offline, logs why it couldn't).
+    action("refresh-rates")
+    downloaded = wait_for(
+        lambda: json.loads(RATES.read_text())["fetched"] > rates_written
+        or "exchange rates not available" in Path(daemon_log).read_text(),
+        seconds=15,
+    )
+    check("refresh-rates action downloads rates", downloaded)
 
     # 3. An image is recorded with thumbnails.
     png = Path(os.environ["XDG_CACHE_HOME"]) / "picture.png"

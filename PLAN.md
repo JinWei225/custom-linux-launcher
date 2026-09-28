@@ -194,7 +194,7 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - **Actions:** Enter opens with the default app for the file's content type, in its own systemd scope like app launches. Alt+Enter shows the file selected in Files (`org.freedesktop.FileManager1.ShowItems`, with an activation token). Files only appear in `files` mode (Super+Shift+F), not the main launcher.
 
 ### 4.1c Launcher Settings and hotkeys (built 2026-09-24, pulled forward from M3/M6)
-- **Launcher Settings** (`launcher --settings`, "Launcher Settings" in the app grid or the launcher's results) is a separate libadwaita process with pages General, Shortcuts, Apps, Quicklinks and Files. A bug in it can't crash the launcher, and a second invocation goes to the open window.
+- **Launcher Settings** (`launcher --settings`, "Launcher Settings" in the app grid or the launcher's results) is a separate libadwaita process with pages General, Shortcuts, Apps, Quicklinks, Snippets, Clipboard, Files and Converters. A bug in it can't crash the launcher, and a second invocation goes to the open window.
 - **Ctrl+E** on an app, quicklink or fallback search in the launcher opens Settings at that item's alias/hotkey dialog.
 - **Safe writes** (`config_writer.py`): every change re-reads `config.toml`, edits it with tomlkit (comments and layout kept), validates the whole result with the launcher's own parser, and only then replaces the file in one step. If a change would make the config invalid, it is refused and nothing is written. If the file was hand-edited into an invalid state, Settings pauses editing and shows why, instead of overwriting it.
 - **Config format:** `[shortcuts]` (launcher, files, clipboard, snippets), `[apps."<desktop id>"]` with `alias`/`hotkey` (replaces `[aliases]`), and `hotkey` on `[[quicklink]]`. Hotkeys must use Super, Ctrl or Alt (or be F1–F24), and must be unique across the config; duplicate aliases and quicklink names are errors.
@@ -279,6 +279,8 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 - Home currency: `home_currency` in `[converters]`, or else from the timezone's country (zone.tab → a country→currency table), else USD.
 - **Tests:** `tests/test_currency.py` (~105 cases: parsing, arithmetic, formatting, the cache's refresh/back-off/in-flight rules with a fake clock, the API response and its failures, the provider); the end-to-end test seeds `rates.json` and checks that Enter on `1.5k usd to jpy` copies `225000`.
 
+**Settings → Converters** (built 2026-09-28): a switch per converter; home currency (a searchable list of the codes in `rates.json`, "Automatic (MYR)" first); how often to download rates (1–168 h); when the rates were published and downloaded, with **Refresh Now**, which runs the daemon's `refresh-rates` action (the daemon owns the cache) and re-reads the file after 1, 4 and 12 s; and the ExchangeRate-API attribution link. The window's default width grew to 1140 px so all 8 page names fit. Checked by driving the real page in the nested shell (switch and combo write the config, the action reaches the daemon, a stopped daemon is reported); `tests/test_config_writer.py` covers the `[converters]` round trip.
+
 ---
 
 ## 5. Project layout
@@ -346,7 +348,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
-| **M6** | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **In progress 2026-09-28:** dates, timezones and currency built |
+| **M6** ✅ | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **Built 2026-09-28:** ~350 new unit tests; 26/26 end-to-end checks in a nested shell; waiting on your daily-use check |
 | **M7** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)

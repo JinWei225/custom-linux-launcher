@@ -119,3 +119,26 @@ def test_new_keys_go_after_the_last_key_not_after_trailing_comments(tmp_path):
     a_block = lines[lines.index('name = "A"') : lines.index('name = "A"') + 3]
     assert a_block == ['name = "A"', 'url = "https://a"', 'hotkey = "<Super>a"']
     assert load_config(path)[1] == []  # nothing ended up in the wrong table
+
+
+def test_converter_settings_round_trip(writer):
+    # What the Converters page writes: a [converters] table is added on first use.
+    writer.set_value("converters", "timezones", False)
+    writer.set_value("converters", "home_currency", "SGD")
+    config = writer.set_value("converters", "refresh_hours", 24)
+    c = config.converters
+    assert (c.dates, c.timezones, c.currency) == (True, False, True)
+    assert (c.home_currency, c.refresh_hours) == ("SGD", 24)
+    config = writer.set_value("converters", "home_currency", "")  # back to automatic
+    assert config.converters.home_currency == ""
+    assert load_config(writer.path)[0] == config
+    assert "# my comment stays" in writer.path.read_text()
+
+
+def test_invalid_converter_settings_write_nothing(writer):
+    before = writer.path.read_text()
+    with pytest.raises(ConfigError):
+        writer.set_value("converters", "home_currency", "ringgit")
+    with pytest.raises(ConfigError):
+        writer.set_value("converters", "refresh_hours", 0)
+    assert writer.path.read_text() == before
