@@ -48,6 +48,7 @@ from .providers.quicklinks import (  # noqa: E402
     fill_url,  # noqa: E402
 )
 from .providers.snippets import SnippetsProvider  # noqa: E402
+from .providers.timezones import TimezonesProvider  # noqa: E402
 from .snippets import expand, sync_espanso, uses_clipboard  # noqa: E402
 from .store import UsageStore  # noqa: E402
 from .window import LauncherWindow  # noqa: E402
@@ -80,6 +81,7 @@ class LauncherApp(Adw.Application):
         self._clips: ClipboardStore | None = None
         self._recorder: ClipboardRecorder | None = None
         self._paste_target: Target | None = None
+        self._interface_settings: Gio.Settings | None = None
 
     # --- lifecycle -------------------------------------------------------------------
 
@@ -120,6 +122,7 @@ class LauncherApp(Adw.Application):
                 "quicklinks": QuickLinksProvider(self, icons=self._website_icon),
                 "commands": CommandsProvider(self),
                 "dates": DatesProvider(self),
+                "timezones": TimezonesProvider(self, clock_24h=self._clock_24h),
                 "websearch": WebSearchProvider(self, icons=self._website_icon),
                 "files": FilesProvider(self, file_index),
                 "clipboard": ClipboardProvider(self, self._clips, app_name=_app_name),
@@ -260,6 +263,16 @@ class LauncherApp(Adw.Application):
         # The file manager needs an activation token to raise its window.
         token = self._launch_context().get_startup_notify_id(None, []) or ""
         launching.reveal_file(path, token)
+
+    def _clock_24h(self) -> bool:
+        """Follow the top bar clock's 12/24-hour setting."""
+        if self._interface_settings is None:
+            source = Gio.SettingsSchemaSource.get_default()
+            schema = "org.gnome.desktop.interface"
+            if source is None or source.lookup(schema, True) is None:
+                return True
+            self._interface_settings = Gio.Settings.new(schema)
+        return self._interface_settings.get_string("clock-format") != "12h"
 
     def _website_icon(self, url: str) -> str | None:
         if not self.config.ui.favicons or self._favicons is None:

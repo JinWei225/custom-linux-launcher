@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import gi
@@ -232,6 +232,23 @@ def run(daemon_log: str) -> int:
         got is not None and got.get("text") == "first entry from the app",
         repr(got),
     )
+
+    # 2d. Enter copies a timezone answer (in the nested shell's clock format).
+    launcher("--show", "--mode", "all")
+    time.sleep(0.8)
+    action("debug-set-query", "time in utc")
+    time.sleep(0.4)
+    if SNAPSHOTS:
+        action("debug-snapshot", str(SNAPSHOTS / "timezones.png"))
+        time.sleep(0.2)
+    action("debug-run-selected")
+    time.sleep(0.5)
+    app.send("read-clipboard")
+    app.read(0.5)
+    got = app.last("clipboard") or {}
+    utc_now = datetime.now(UTC)
+    expected = {f"{t.hour:02d}:{t.minute:02d}" for t in (utc_now, utc_now - timedelta(minutes=1))}
+    check("Enter copies a timezone answer", got.get("text") in expected, repr(got))
 
     # 3. An image is recorded with thumbnails.
     png = Path(os.environ["XDG_CACHE_HOME"]) / "picture.png"

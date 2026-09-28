@@ -261,6 +261,16 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 - Adding months stops at the end of the month: Jan 31 + 1 month = Feb 28.
 - **Tests:** `tests/test_dates.py` (~160 cases); the nested end-to-end test checks that Alt+Enter on `tomorrow` pastes the date, that it isn't recorded, and that the clipboard is put back.
 
+**Timezones** (`timezones.py`, `providers/timezones.py`; built 2026-09-28):
+- `time in tokyo`, `what time is it in tokyo`, `tokyo time`, `now in tokyo` → "11:30", subtitle "Tokyo · Mon 28 Sep · 1h ahead of you · UTC+9". A place alone (`tokyo`) gives the same row with score 0.2, so any real app/link/snippet match stays above it; bare names must be full city or country names of 4+ letters (`sf`, `pst`, `utc` alone do nothing).
+- `3pm tokyo`, `tokyo 3pm`, `15:00 in seoul`, `tomorrow 9am new york`, `25 dec 8pm new york` → the local time: "03:00 (next day)", subtitle "Kuala Lumpur, Mon 28 Sep · from 15:00 New York, 12h behind". The day (today, or a day phrase from the date parser) is the *place's* day.
+- `3pm pst to london`, `3pm pst in london`, `3pm to london` (from local) → the time in the second place.
+- Clock input: `3pm`, `3 p.m.`, `9:30am`, `15:00`, `noon`, `midnight`, `now`; a bare number is not a time. Output follows GNOME's `clock-format` (read through Gio.Settings on each query). Enter copies the time only, without "(next day)".
+- Places, first match wins: UTC offsets (`utc`, `gmt-5`, `utc+5:30`), abbreviations mapped to zones so DST applies (`pst` in July is PDT; CST = US Central, IST = India), an alias table of cities the tz database lacks (Beijing, Mumbai, San Francisco, NYC, KL…), every tz city and zone id, then countries from `/usr/share/zoneinfo/{zone,iso3166}.tab` (multi-zone countries use a main zone: United States → New York, Australia → Sydney, and the label says so). Building the index takes ~15 ms, done at config time.
+- A wall time skipped by DST moves on by the gap (2:30 on spring-forward day → 3:30).
+- The local zone comes from `$TZ` or the `/etc/localtime` link, read on each query.
+- **Tests:** `tests/test_timezones.py` (~140 cases: places, offsets, abbreviations with DST, day phrases, formatting, ranking against apps); the end-to-end test checks that Enter copies the time in `time in utc`.
+
 ---
 
 ## 5. Project layout
@@ -301,6 +311,7 @@ linux-launcher/
 │       ├── files.py
 │       ├── clipboard.py
 │       ├── dates.py              # date answers (parser in ../dates.py)
+│       ├── timezones.py          # time answers (places and parsing in ../timezones.py)
 │       └── snippets.py           # + espanso YAML generator
 ├── extension/launcher-helper@jinwei.github.io/
 │   ├── metadata.json             # shell-version: ["50"]
@@ -326,7 +337,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
-| **M6** | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **In progress 2026-09-28:** dates built |
+| **M6** | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **In progress 2026-09-28:** dates and timezones built |
 | **M7** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)

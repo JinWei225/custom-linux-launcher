@@ -131,6 +131,7 @@ class ConvertersConfig:
     """Answers typed straight into the main launcher ("tomorrow", "days until xmas")."""
 
     dates: bool = True
+    timezones: bool = True
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,7 @@ terminal_apps = [
 # answer, Alt+Enter pastes it into the window you came from.
 [converters]
 dates = true              # "tomorrow", "2 months after today", "days until christmas"
+timezones = true          # "time in tokyo", "3pm tokyo", "3pm pst to london"
 
 # Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
 # and press Ctrl+E to set these without editing this file.
