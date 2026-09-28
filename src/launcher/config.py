@@ -132,6 +132,9 @@ class ConvertersConfig:
 
     dates: bool = True
     timezones: bool = True
+    currency: bool = True
+    home_currency: str = ""  # ISO code; "" = the currency of the country the clock is set to
+    refresh_hours: int = 6  # how often to download new exchange rates
 
 
 @dataclass(frozen=True)
@@ -160,6 +163,7 @@ _RANGES: dict[str, tuple[int, int]] = {
     "clipboard.max_entries": (10, 10_000),
     "clipboard.max_days": (1, 3650),
     "clipboard.max_image_mb": (1, 200),
+    "converters.refresh_hours": (1, 168),
 }
 
 DEFAULT_CONFIG_TEXT = """\
@@ -214,6 +218,9 @@ terminal_apps = [
 [converters]
 dates = true              # "tomorrow", "2 months after today", "days until christmas"
 timezones = true          # "time in tokyo", "3pm tokyo", "3pm pst to london"
+currency = true           # "100 usd", "1.5k jpy to myr" (rates from open.er-api.com)
+home_currency = ""        # e.g. "MYR"; "" = the currency of your timezone's country
+refresh_hours = 6         # how often to download new exchange rates (1-168)
 
 # Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
 # and press Ctrl+E to set these without editing this file.
@@ -284,6 +291,7 @@ def parse_config(
         )
     config = _build(Config, data, "", warnings)
     _check_links_and_aliases(config)
+    _check_converters(config)
     _check_snippets(config)
     _check_hotkeys(config)
     return config, warnings
@@ -424,6 +432,14 @@ def _check_links_and_aliases(config: Config) -> None:
     names = [link.name.casefold() for link in config.quicklinks]
     if len(set(names)) != len(names):
         raise ConfigError("two quicklinks have the same name; names must be unique")
+
+
+def _check_converters(config: Config) -> None:
+    home = config.converters.home_currency
+    if home and not (len(home) == 3 and home.isascii() and home.isalpha()):
+        raise ConfigError(
+            f'converters.home_currency must be a 3-letter currency code like "MYR", got {home!r}'
+        )
 
 
 def _check_snippets(config: Config) -> None:

@@ -30,6 +30,7 @@ DATA = Path(os.environ["XDG_DATA_HOME"]) / "launcher"
 CONFIG = Path(os.environ["XDG_CONFIG_HOME"]) / "launcher" / "config.toml"
 SNIPPETS = CONFIG.with_name("snippets.toml")
 ESPANSO = Path(os.environ["XDG_CONFIG_HOME"]) / "espanso" / "match" / "launcher.yml"
+RATES = Path(os.environ["XDG_CACHE_HOME"]) / "launcher" / "rates.json"
 TEST_APP_ID = "io.github.jinwei.LauncherNestedTest"
 
 results: list[tuple[str, bool]] = []
@@ -111,6 +112,10 @@ def main() -> int:
         'body = "Hello {clipboard}!{cursor} bye"\n\n'
         '[[snippet]]\nname = "Plain"\nbody = """\nplain snippet"""\n'
     )
+    # Fixed exchange rates, fresh enough that the daemon doesn't download new ones.
+    RATES.parent.mkdir(parents=True, exist_ok=True)
+    RATES.write_text(json.dumps({"updated": time.time(), "fetched": time.time(),
+                                 "rates": {"USD": 1, "MYR": 4, "JPY": 150}}))  # fmt: skip
     daemon_log = open(Path(os.environ["XDG_CACHE_HOME"]) / "daemon.log", "w")
     daemon = subprocess.Popen(
         [LAUNCHER, "--daemon", "--debug"], stdout=daemon_log, stderr=daemon_log
@@ -249,6 +254,21 @@ def run(daemon_log: str) -> int:
     utc_now = datetime.now(UTC)
     expected = {f"{t.hour:02d}:{t.minute:02d}" for t in (utc_now, utc_now - timedelta(minutes=1))}
     check("Enter copies a timezone answer", got.get("text") in expected, repr(got))
+
+    # 2e. Currency: rates from the cache file; Enter copies the plain amount.
+    launcher("--show", "--mode", "all")
+    time.sleep(0.8)
+    action("debug-set-query", "1.5k usd to jpy")
+    time.sleep(0.4)
+    if SNAPSHOTS:
+        action("debug-snapshot", str(SNAPSHOTS / "currency.png"))
+        time.sleep(0.2)
+    action("debug-run-selected")
+    time.sleep(0.5)
+    app.send("read-clipboard")
+    app.read(0.5)
+    got = app.last("clipboard") or {}
+    check("Enter copies a currency answer", got.get("text") == "225000", repr(got))
 
     # 3. An image is recorded with thumbnails.
     png = Path(os.environ["XDG_CACHE_HOME"]) / "picture.png"

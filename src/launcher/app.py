@@ -31,6 +31,7 @@ from .config import (  # noqa: E402
     load_config,
     snippets_file,
 )
+from .currency import RatesCache  # noqa: E402
 from .engine import MODES, Engine  # noqa: E402
 from .favicons import FaviconCache  # noqa: E402
 from .file_watcher import FileWatcher  # noqa: E402
@@ -40,6 +41,7 @@ from .providers.apps import AppsProvider  # noqa: E402
 from .providers.base import Result  # noqa: E402
 from .providers.clipboard import ClipboardProvider  # noqa: E402
 from .providers.commands import CommandsProvider  # noqa: E402
+from .providers.currency import CurrencyProvider  # noqa: E402
 from .providers.dates import DatesProvider  # noqa: E402
 from .providers.files import FilesProvider  # noqa: E402
 from .providers.quicklinks import (  # noqa: E402
@@ -51,6 +53,7 @@ from .providers.snippets import SnippetsProvider  # noqa: E402
 from .providers.timezones import TimezonesProvider  # noqa: E402
 from .snippets import expand, sync_espanso, uses_clipboard  # noqa: E402
 from .store import UsageStore  # noqa: E402
+from .timezones import system_zone  # noqa: E402
 from .window import LauncherWindow  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -76,6 +79,7 @@ class LauncherApp(Adw.Application):
         self._reload_source = 0
         self._usage: UsageStore | None = None
         self._favicons: FaviconCache | None = None
+        self._rates: RatesCache | None = None
         self._file_watcher: FileWatcher | None = None
         self._helper: Helper | None = None
         self._clips: ClipboardStore | None = None
@@ -103,6 +107,11 @@ class LauncherApp(Adw.Application):
             on_update=lambda: self.window and self.window.refresh_if_visible(),
             call_soon=lambda fn: GLib.idle_add(lambda: (fn(), GLib.SOURCE_REMOVE)[1]),
         )
+        self._rates = RatesCache(
+            paths.cache_dir() / "rates.json",
+            on_update=lambda: self.window and self.window.refresh_if_visible(),
+            call_soon=lambda fn: GLib.idle_add(lambda: (fn(), GLib.SOURCE_REMOVE)[1]),
+        )
         apps = AppsProvider(self)
         file_index = FileIndex()
         self._file_watcher = FileWatcher(file_index)
@@ -123,6 +132,9 @@ class LauncherApp(Adw.Application):
                 "commands": CommandsProvider(self),
                 "dates": DatesProvider(self),
                 "timezones": TimezonesProvider(self, clock_24h=self._clock_24h),
+                "currency": CurrencyProvider(
+                    self, self._rates, zone_key=lambda: getattr(system_zone(), "key", None)
+                ),
                 "websearch": WebSearchProvider(self, icons=self._website_icon),
                 "files": FilesProvider(self, file_index),
                 "clipboard": ClipboardProvider(self, self._clips, app_name=_app_name),
@@ -153,6 +165,8 @@ class LauncherApp(Adw.Application):
             self._usage.close()
         if self._favicons is not None:
             self._favicons.shutdown()
+        if self._rates is not None:
+            self._rates.shutdown()
         if self._file_watcher is not None:
             self._file_watcher.shutdown()
         Adw.Application.do_shutdown(self)

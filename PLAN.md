@@ -271,6 +271,14 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 - The local zone comes from `$TZ` or the `/etc/localtime` link, read on each query.
 - **Tests:** `tests/test_timezones.py` (~140 cases: places, offsets, abbreviations with DST, day phrases, formatting, ranking against apps); the end-to-end test checks that Enter copies the time in `time in utc`.
 
+**Currency** (`currency.py`, `providers/currency.py`; built 2026-09-28):
+- `100 usd` → "407.44 MYR", subtitle "100 USD → MYR · 1 USD = 4.0744 MYR · rates from today". Only the home currency is shown; `100 myr` (already home) shows USD instead. `100 usd to/in/into/as/-> jpy`, `usd to myr` (1 unit).
+- Input: ISO codes (any the rates know), names (`dollars`, `ringgit`, `won`, `yuan`, `yen`, `euros`, `pounds`, `singapore dollars`…; `peso`/`krone` need the country), `100usd`, `1,234.50`, shorthand `1.5k`/`2m`/`3 bn`, and arithmetic `(12+30)*3`, `2 x 19.99`, `2^10` through a small parser (no `eval`). No symbols (`$`, `RM`). Codes that are English words (`top`, `all`, `try`, `cup`…) only count in upper case or with a target, so `10 top` stays a search.
+- Enter copies the plain amount (`225000`, no separators); the title uses separators. Two decimals, none for JPY/KRW/VND/IDR…, and 3 significant digits below 1 (`0.00300`).
+- **Rates:** `https://open.er-api.com/v6/latest/USD` (ExchangeRate-API's keyless endpoint, updated daily; attribution: exchangerate-api.com), stored atomically in `~/.cache/launcher/rates.json`. `RatesCache` downloads in a worker thread when the rates are older than `refresh_hours` (default 6), at config time and when a currency query is typed; never for other typing. After a failure it waits 10 minutes; old rates keep working and the subtitle adds "(can't update: offline?)" once they are due. Before the first download a row says "no exchange rates yet" (Enter does nothing). New rates redraw an open window.
+- Home currency: `home_currency` in `[converters]`, or else from the timezone's country (zone.tab → a country→currency table), else USD.
+- **Tests:** `tests/test_currency.py` (~105 cases: parsing, arithmetic, formatting, the cache's refresh/back-off/in-flight rules with a fake clock, the API response and its failures, the provider); the end-to-end test seeds `rates.json` and checks that Enter on `1.5k usd to jpy` copies `225000`.
+
 ---
 
 ## 5. Project layout
@@ -310,6 +318,7 @@ linux-launcher/
 │       ├── quicklinks.py         # quicklinks + fallback web searches
 │       ├── files.py
 │       ├── clipboard.py
+│       ├── currency.py           # currency answers (parser and rates cache in ../currency.py)
 │       ├── dates.py              # date answers (parser in ../dates.py)
 │       ├── timezones.py          # time answers (places and parsing in ../timezones.py)
 │       └── snippets.py           # + espanso YAML generator
@@ -337,7 +346,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M3** ✅ | Shortcut sync with clash check; per-mode and per-item hotkeys (done early, through Launcher Settings) | ✅ D8 | All mode shortcuts work from any app. **Done:** recording and hotkeys confirmed by hand |
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
-| **M6** | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **In progress 2026-09-28:** dates and timezones built |
+| **M6** | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **In progress 2026-09-28:** dates, timezones and currency built |
 | **M7** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)
