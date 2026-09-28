@@ -335,3 +335,19 @@ def test_section_at():
         None, None, 0, 0, 1, 1, 2, 2,
     ]  # fmt: skip
     assert section_at([], 3) is None
+
+
+from launcher.notes_markdown import styled_text  # noqa: E402
+
+
+def test_styled_text():
+    text, styles = styled_text("see **bold [link](https://a.b)** and `x`")
+    assert text == "see bold link and x"
+    assert [(s.kind, text[s.start : s.end], s.url) for s in styles] == [
+        ("bold", "bold link", ""),
+        ("link", "link", "https://a.b"),
+        ("code", "x", ""),
+    ]
+    text, styles = styled_text("- item *it*", start=2)
+    assert (text, [(s.kind, s.start, s.end) for s in styles]) == ("item it", [("italic", 5, 7)])
+    assert styled_text("****") == ("****", [])

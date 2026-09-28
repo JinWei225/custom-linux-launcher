@@ -14,12 +14,13 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+import cairo
 import gi
 
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from .. import paths  # noqa: E402
 from ..config import Config, ConfigError, load_config  # noqa: E402
@@ -27,6 +28,7 @@ from ..notes_markdown import Heading, section_at  # noqa: E402
 from ..notes_store import NotesError, NoteSession, NotesStore, flatten  # noqa: E402
 from .editor import MarkdownEditor  # noqa: E402
 from .outline import Outline  # noqa: E402
+from .pdf import export_pdf  # noqa: E402
 from .sidebar import Sidebar, SidebarRow  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -199,6 +201,7 @@ class NotesWindow(Adw.ApplicationWindow):
             ("delete-folder", "s", lambda p: self._confirm_delete_folder(p.get_string())),
             ("open-folder", None, lambda _p: self._open_notes_folder()),
             ("outline", None, lambda _p: self.show_outline()),
+            ("export-pdf", None, lambda _p: self.ask_export_pdf()),
         ]
         for name, ptype, handler in actions:
             action = Gio.SimpleAction.new(name, GLib.VariantType.new(ptype) if ptype else None)
@@ -207,6 +210,7 @@ class NotesWindow(Adw.ApplicationWindow):
         app.set_accels_for_action("win.new-note", ["<Control>n"])
         app.set_accels_for_action("win.toggle-sidebar", ["F9"])
         app.set_accels_for_action("win.outline", ["<Control><Shift>o"])
+        app.set_accels_for_action("win.export-pdf", ["<Control><Shift>e"])
         app.set_accels_for_action("window.close", ["<Control>w"])
 
     # --- menus ---------------------------------------------------------------------------
@@ -249,6 +253,10 @@ class NotesWindow(Adw.ApplicationWindow):
 
     def _update_header_menu(self) -> None:
         menu = self._note_menu(self.session.rel) if self.session else Gio.Menu()
+        if self.session:
+            export = Gio.Menu()
+            export.append("Export to PDF…", "win.export-pdf")
+            menu.prepend_section(None, export)
         general = Gio.Menu()
         general.append_item(_item("New Folder…", "new-folder", ""))
         general.append("Open Notes Folder", "win.open-folder")
@@ -532,6 +540,67 @@ class NotesWindow(Adw.ApplicationWindow):
         self.buffer.place_cursor(self.buffer.get_iter_at_offset(min(offset, len(text))))
         self._banner.set_revealed(False)
         self._update_title()
+
+    # --- PDF -------------------------------------------------------------------------------
+
+    def ask_export_pdf(self) -> None:
+        if self.session is None:
+            return
+        self.save_now()
+        dialog = Gtk.FileDialog(
+            title="Export to PDF", initial_name=f"{Path(self.session.rel).stem}.pdf"
+        )
+        pdfs = Gtk.FileFilter(name="PDF documents")
+        pdfs.add_mime_type("application/pdf")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(pdfs)
+        dialog.set_filters(filters)
+        folder = self._state.get("export_folder") or GLib.get_user_special_dir(
+            GLib.UserDirectory.DIRECTORY_DOCUMENTS
+        )
+        if folder and Path(folder).is_dir():
+            dialog.set_initial_folder(Gio.File.new_for_path(folder))
+        dialog.save(self, None, self._on_export_chosen)
+
+    def _on_export_chosen(self, dialog: Gtk.FileDialog, result: Gio.AsyncResult) -> None:
+        try:
+            file = dialog.save_finish(result)
+        except GLib.Error:
+            return  # cancelled
+        if file is not None and file.get_path():
+            path = Path(file.get_path())
+            self.export_pdf(path if path.suffix.lower() == ".pdf" else path.with_suffix(".pdf"))
+
+    def export_pdf(self, path: Path) -> bool:
+        """Write the open note to `path` as a PDF; a toast offers to open it."""
+        if self.session is None:
+            return False
+        font = Pango.FontDescription.from_string(
+            Gtk.Settings.get_default().get_property("gtk-font-name") or "Sans"
+        ).get_family()
+        try:
+            pages = export_pdf(
+                self._text(),
+                path,
+                title=self.session.title,
+                image_path=self.editor.image_path,
+                font=font or "Sans",
+            )
+        except (OSError, cairo.Error, GLib.Error) as e:
+            log.error("exporting %s to %s failed: %s", self.session.rel, path, e)
+            self.toast(f"Could not export: {e}")
+            return False
+        log.debug("exported %s to %s (%d pages)", self.session.rel, path, pages)
+        self._state["export_folder"] = str(path.parent)
+        toast = Adw.Toast(title=f"Exported “{path.name}”", button_label="Open", timeout=5)
+        toast.connect(
+            "button-clicked",
+            lambda _t: Gtk.FileLauncher.new(Gio.File.new_for_path(str(path))).launch(
+                self, None, None
+            ),
+        )
+        self._toasts.add_toast(toast)
+        return True
 
     # --- note and folder operations -------------------------------------------------------
 

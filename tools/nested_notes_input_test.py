@@ -12,6 +12,7 @@ shell reports as a failure. Run through:
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,7 +23,8 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Graphene", "1.0")
-from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk  # noqa: E402
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -282,6 +284,52 @@ def main() -> int:
         check("clicking a heading jumps to it", cursor() == (0, 2), repr(cursor()))
         top = editor.get_visible_rect().y
         check("…scrolled back to the top", top < 30, repr(top))
+
+    # PDF export: in the note's menu and on Ctrl+Shift+E; pictures are found next to
+    # the note; a toast offers to open the file; failures are reported, not raised.
+    menu = window._menu_button.get_menu_model()
+    labels = [
+        sub.get_item_attribute_value(i, "label").get_string()
+        for section in range(menu.get_n_items())
+        for sub in [menu.get_item_link(section, "section")]
+        for i in range(sub.get_n_items())
+    ]
+    check("the menu offers Export to PDF…", "Export to PDF…" in labels, repr(labels))
+    asked = []
+    real_ask = window.ask_export_pdf
+    window.ask_export_pdf = lambda: asked.append(True)
+    io.key(Gdk.KEY_Control_L, True)
+    io.key(Gdk.KEY_Shift_L, True)
+    io.key(Gdk.KEY_e)
+    io.key(Gdk.KEY_Shift_L, False)
+    io.key(Gdk.KEY_Control_L, False)
+    pump(0.3)
+    window.ask_export_pdf = real_ask
+    check("Ctrl+Shift+E asks where to export", asked == [True])
+    pictures = NOTES / "attachments"
+    pictures.mkdir(exist_ok=True)
+    pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 300, 120)
+    pixbuf.fill(0x2EC27EFF)
+    pixbuf.savev(str(pictures / "shot.png"), "png", [], [])
+    buffer.insert(buffer.get_end_iter(), "\n![](attachments/shot.png)\n")
+    pump(0.3)
+    exports = NOTES.parent / "exports"
+    exports.mkdir(exist_ok=True)
+    toasts = []
+    real_add = window._toasts.add_toast
+    window._toasts.add_toast = lambda t: (toasts.append(t), real_add(t))
+    ok = window.export_pdf(exports / "Course.pdf")
+    listing = subprocess.run(["pdfimages", "-list", str(exports / "Course.pdf")],
+                             capture_output=True, text=True).stdout  # fmt: skip
+    check("export writes the PDF", ok and (exports / "Course.pdf").stat().st_size > 1000)
+    check("…with the note's picture", " 300   120 " in listing, listing)
+    check("…and a toast that opens it",
+          bool(toasts) and toasts[-1].get_button_label() == "Open", repr(toasts))  # fmt: skip
+    check("…remembering the folder", window._state.get("export_folder") == str(exports))
+    failed = window.export_pdf(exports / "missing" / "x.pdf")
+    message = toasts[-1].get_title()
+    check("a failed export is reported", not failed and "Could not export" in message, message)
+    window._toasts.add_toast = real_add
 
     window.save_now()
     saved = (NOTES / window.session.rel).read_text()

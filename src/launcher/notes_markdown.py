@@ -366,11 +366,31 @@ def attachment_links(text: str) -> list[str]:
 def plain_text(line: str, start: int = 0) -> str:
     """A line from column `start` as it reads, without inline markers ("**a** [b](u)" ->
     "a b")."""
+    return styled_text(line, start)[0]
+
+
+def styled_text(line: str, start: int = 0) -> tuple[str, list[Span]]:
+    """A line from column `start` as it reads, and its inline styles with columns in
+    that text (spans may overlap: "**a *b** c*")."""
+    spans = inline_spans(line, start)
     hidden: set[int] = set()
-    for sp in inline_spans(line, start):
+    for sp in spans:
         hidden.update(range(sp.start, sp.inner_start))
         hidden.update(range(sp.inner_end, sp.end))
-    return "".join(ch for i, ch in enumerate(line) if i >= start and i not in hidden)
+    at = [0] * (len(line) + 1)  # column in the line -> column in the text
+    out = []
+    for i, ch in enumerate(line):
+        at[i + 1] = at[i]
+        if i >= start and i not in hidden:
+            out.append(ch)
+            at[i + 1] += 1
+    styles = [
+        Span(sp.kind, at[sp.inner_start], at[sp.inner_end], at[sp.inner_start],
+             at[sp.inner_end], sp.url)
+        for sp in spans
+        if at[sp.inner_end] > at[sp.inner_start]
+    ]  # fmt: skip
+    return "".join(out), styles
 
 
 # --- outline ---------------------------------------------------------------------------
