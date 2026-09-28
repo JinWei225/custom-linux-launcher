@@ -102,10 +102,21 @@ def main() -> int:
     subprocess.run([sys.executable, "-c", "import gi; gi.require_version('Adw', '1'); "
                     "from gi.repository import Adw; Adw.init()"], check=False)  # fmt: skip
 
+    # Started with the launcher at login: running, window built but not shown.
+    first = subprocess.Popen([LAUNCHER, "--notes", "--background"])
+    check("--background starts Notes", wait_for(notes_running, 10))
+    time.sleep(1.0)
+    check("…without showing it", not shown("Notes") and not shown())
+    notes_cli("--background")
+    time.sleep(0.5)
+    check("…and asking again doesn't show it either", not shown("Notes") and not shown())
+
     start = time.monotonic()
-    first = subprocess.Popen([LAUNCHER, "--notes", "--open", "Week 1.md"])
-    appeared = wait_for(shown, 10)
-    check("launcher --notes starts Notes", appeared, f"{time.monotonic() - start:.2f}s")
+    notes_cli("--open", "Week 1.md")
+    appeared = wait_for(shown, 3)
+    seconds = time.monotonic() - start
+    # A cold start takes about 0.9 s here.
+    check("the first open is quick", appeared and seconds < 0.5, f"{seconds:.2f}s")
     check("…focused", wait_for(lambda: focused() == TITLE), focused())
 
     # Type, then hide with the shortcut's command: saved first, and it hides.

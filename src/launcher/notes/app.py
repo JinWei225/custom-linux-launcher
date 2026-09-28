@@ -27,7 +27,9 @@ class NotesApp(Adw.Application):
     A running Notes is driven through app actions (`launcher --notes` calls them over
     D-Bus without starting Python's GTK, see client.py): "toggle" shows the window, or
     hides it if it is the focused one (Super+Shift+N); "open-note" and "new-note". A
-    first call starts it through the command line instead. Ctrl+Q quits.
+    first call starts it through the command line instead. Ctrl+Q quits. The launcher
+    starts it at login with `--background` (`[notes] preload`): the window is built but
+    not shown, so even the first Super+Shift+N is quick.
     """
 
     def __init__(self) -> None:
@@ -42,6 +44,7 @@ class NotesApp(Adw.Application):
             ("open-note", "s", lambda p: self._show().open_note(p.get_string())),
             ("new-note", "s", lambda p: self._show().new_note(text=p.get_string())),
             ("quit", None, lambda _p: self.quit_notes()),
+            ("preload", None, lambda _p: self.window()),
         ):
             action = Gio.SimpleAction.new(name, GLib.VariantType.new(ptype) if ptype else None)
             action.connect("activate", lambda _a, p, h=handler: h(p))
@@ -70,6 +73,10 @@ class NotesApp(Adw.Application):
         def value(flag: str) -> str | None:
             return args[args.index(flag) + 1] if flag in args[:-1] else None
 
+        if "--background" in args:
+            # Started with the launcher at login: build the window now, show it later.
+            self.window().realize()
+            return 0
         window = self._show()
         if note := value("--open"):
             window.open_note(note)
@@ -78,8 +85,12 @@ class NotesApp(Adw.Application):
         return 0
 
 
-def run_notes(open_note: str | None = None, new: str | None = None) -> int:
+def run_notes(
+    open_note: str | None = None, new: str | None = None, background: bool = False
+) -> int:
     argv = [sys.argv[0]]
+    if background:
+        argv += ["--background"]
     if open_note:
         argv += ["--open", open_note]
     if new is not None:

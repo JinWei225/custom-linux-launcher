@@ -61,7 +61,9 @@ checkbox, `**bold**` turns bold, and the markdown symbols hide once you move to 
 line. Each note is a plain `.md` file in `~/Notes`, with folders as notebooks, pinned and
 recent notes in a sidebar you can hide (F9), an outline of the headings, pasted
 screenshots, export to PDF, and autosave (a second after you stop typing, and whenever
-you switch to another window). Notes also show up in the launcher's search.
+you switch to another window). Notes also show up in the launcher's search. It starts
+hidden when you log in, so Super+Shift+N opens it at once (and hides it again); Ctrl+Q
+quits it.
 
 <p align="center">
   <img src="docs/screenshots/notes.png" width="49%" alt="A lecture note">
@@ -116,7 +118,7 @@ Set in Launcher Settings → Shortcuts (keys already used by GNOME are refused):
 | Shift+Super+V | clipboard history |
 | Shift+Super+P | pause / resume clipboard recording |
 | Shift+Super+S | snippets |
-| Shift+Super+N | Notes |
+| Shift+Super+N | Notes (press again to hide it) |
 
 In the launcher: **Enter** runs the selection, **Alt+Enter** its second action (copy,
 reveal), **Ctrl+1…9** picks a row, **Tab** completes an alias, **Ctrl+E** edits the

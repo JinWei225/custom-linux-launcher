@@ -154,3 +154,10 @@ def test_appearance_round_trip(writer):
     with pytest.raises(ConfigError):
         writer.set_value("ui", "appearance", "sepia")
     assert writer.path.read_text() == before
+
+
+def test_notes_preload_round_trip(writer):
+    assert load_config(writer.path)[0].notes.preload is True  # on unless turned off
+    config = writer.set_value("notes", "preload", False)
+    assert config.notes.preload is False
+    assert load_config(writer.path)[0].notes.preload is False

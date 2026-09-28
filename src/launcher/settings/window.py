@@ -333,6 +333,16 @@ class GeneralPage(_Page):
         choose.connect("clicked", lambda _b: self._pick_notes_folder())
         self._notes_folder.add_suffix(choose)
         notes.add(self._notes_folder)
+        self._notes_preload = switch_row(
+            title="Start with the Launcher",
+            subtitle="Keeps Notes ready in the background from login, so it opens at once "
+            "(about 70 MB of memory)",
+        )
+        self._notes_preload.connect(
+            "notify::active",
+            lambda r, _p: self._save_now(lambda w: w.set_value("notes", "preload", r.get_active())),
+        )
+        notes.add(self._notes_preload)
         self.add(notes)
 
     def _pick_notes_folder(self) -> None:
@@ -357,6 +367,7 @@ class GeneralPage(_Page):
     def refresh(self, config: Config) -> None:
         self._loading = True
         self._notes_folder.set_subtitle(config.notes.folder)
+        self._notes_preload.set_active(config.notes.preload)
         self._appearance.set_selected(APPEARANCES.index(config.ui.appearance))
         self._width.set_value(config.ui.width)
         self._rows.set_value(config.ui.max_results)

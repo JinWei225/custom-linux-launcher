@@ -39,6 +39,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     group.add_argument("--notes", action="store_true", help="open Notes")
     parser.add_argument("--open", metavar="NOTE", help="with --notes: open this note")
     parser.add_argument("--new", metavar="TITLE", help="with --notes: start a new note")
+    parser.add_argument(
+        "--background", action="store_true", help="with --notes: start Notes hidden"
+    )
     group.add_argument(
         "--clipboard-pause", action="store_true", help="pause / resume clipboard recording"
     )
@@ -114,7 +117,9 @@ def main(argv: list[str] | None = None) -> int:
         from . import NOTES_APP_ID
         from .client import SendStatus, send
 
-        if args.open:
+        if args.background:
+            request = ("preload", None)  # already running: nothing to do
+        elif args.open:
             request = ("open-note", args.open)
         elif args.new is not None:
             request = ("new-note", args.new)
@@ -128,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         from .notes.app import run_notes
 
-        return run_notes(args.open, args.new)
+        return run_notes(args.open, args.new, background=args.background)
 
     if args.settings:
         from .settings.app import run_settings

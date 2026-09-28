@@ -121,8 +121,22 @@ class TestApp:
         return next((e for e in reversed(self.events) if e["event"] == event), None)
 
 
+def notes_call(*args: str) -> str:
+    """Ask the running Notes app something over D-Bus ("" if it isn't running)."""
+    return subprocess.run(
+        ["gdbus", "call", "--session", "--dest", "io.github.jinwei.Launcher.Notes",
+         "--object-path", "/io/github/jinwei/Launcher/Notes", *args],
+        check=False, capture_output=True, text=True, timeout=10,
+    ).stdout  # fmt: skip
+
+
 def main() -> int:
+    from launcher.config import DEFAULT_CONFIG_TEXT
+
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    # The default config, but with notes in this session: the daemon starts Notes in
+    # the background (preload), which must not read the real ~/Notes.
+    CONFIG.write_text(DEFAULT_CONFIG_TEXT.replace('folder = "~/Notes"', f'folder = "{NOTES}"'))
     ESPANSO.parent.mkdir(parents=True, exist_ok=True)
     SNIPPETS.write_text(
         '[[snippet]]\nname = "Greeting"\ntrigger = ";hi"\n'
@@ -406,10 +420,12 @@ def run(daemon_log: str) -> int:
           repr(light))  # fmt: skip
 
     # 7. Notes are found by title; Enter opens the note in Notes (last: it takes focus).
+    # The daemon started Notes hidden a few seconds after it started ([notes] preload).
+    preloaded = wait_for(lambda: "toggle" in notes_call("--method", "org.gtk.Actions.List"), 20)
+    check("the launcher starts Notes in the background", preloaded)
+    check("…without showing it", not window_open("Notes"))
     NOTES.mkdir(parents=True, exist_ok=True)
     (NOTES / "Lecture 3.md").write_text("# Lecture 3: Fourier **Series**\n\nnotes\n")
-    CONFIG.write_text(CONFIG.read_text().replace('folder = "~/Notes"', f'folder = "{NOTES}"', 1))
-    time.sleep(1.0)  # the daemon reloads its config
     launcher("--show", "--mode", "all")
     time.sleep(0.8)
     action("debug-set-query", "fourier")
@@ -420,7 +436,7 @@ def run(daemon_log: str) -> int:
     action("debug-run-selected")
     opened = wait_for(lambda: window_open("Lecture 3: Fourier Series – Notes"), seconds=10)
     check("Enter on a note opens it in Notes", opened)
-    subprocess.run(["pkill", "-f", "--", f"--open {NOTES}"], check=False)
+    notes_call("--method", "org.gtk.Actions.Activate", "'quit'", "@av []", "@a{sv} {}")
     time.sleep(0.5)
 
     # 8. Setup problems reach the launcher's banner, and can be dismissed.

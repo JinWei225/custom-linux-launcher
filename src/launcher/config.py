@@ -134,6 +134,7 @@ class FilesConfig:
 @dataclass(frozen=True)
 class NotesConfig:
     folder: str = "~/Notes"  # one markdown file per note; sub-folders are notebooks
+    preload: bool = True  # start Notes hidden with the launcher, so it opens at once
 
 
 @dataclass(frozen=True)
@@ -238,6 +239,7 @@ refresh_hours = 6         # how often to download new exchange rates (1-168)
 # Notes (Super+Shift+N): one markdown file per note in this folder.
 [notes]
 folder = "~/Notes"
+preload = true            # start Notes hidden at login, so Super+Shift+N opens it at once
 
 # Per-app alias and hotkey, keyed by desktop file id. In the launcher, select an app
 # and press Ctrl+E to set these without editing this file.

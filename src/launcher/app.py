@@ -20,7 +20,16 @@ gi.require_version("GLibUnix", "2.0")
 gi.require_version("GioUnix", "2.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GLibUnix, Gtk  # noqa: E402
 
-from . import APP_ID, appearance, crash, doctor, launching, paths, shortcuts  # noqa: E402
+from . import (  # noqa: E402
+    APP_ID,
+    NOTES_APP_ID,
+    appearance,
+    crash,
+    doctor,
+    launching,
+    paths,
+    shortcuts,
+)
 from .clipboard_recorder import ClipboardRecorder  # noqa: E402
 from .clipboard_store import ClipboardStore, app_matches  # noqa: E402
 from .config import (  # noqa: E402
@@ -63,6 +72,7 @@ log = logging.getLogger(__name__)
 CONFIG_RELOAD_DELAY_MS = 200
 SETUP_CHECK_DELAY_S = 3  # after startup, so the helper extension has answered
 SETUP_RECHECK_S = 60  # when the launcher opens, if the last check is older than this
+NOTES_PRELOAD_DELAY_S = 8  # after startup: don't compete with the rest of the login
 # After pasting a snippet (or other text): when to move the cursor to {cursor}, and when to put back
 # what was on the clipboard before (the app must have read the snippet by then).
 CURSOR_DELAY_MS = 150
@@ -172,6 +182,8 @@ class LauncherApp(Adw.Application):
         # Give the helper extension a moment to answer before the first setup check.
         GLib.timeout_add_seconds(SETUP_CHECK_DELAY_S, lambda: (self.check_setup(), False)[1])
         threading.Thread(target=self._detect_crash, name="crash-check", daemon=True).start()
+        if self.config.notes.preload:
+            GLib.timeout_add_seconds(NOTES_PRELOAD_DELAY_S, self._preload_notes)
 
     def do_shutdown(self) -> None:
         if self._clips is not None:
@@ -253,9 +265,12 @@ class LauncherApp(Adw.Application):
             return
         for w in warnings:
             log.warning("config: %s", w)
+        turned_on = config.notes.preload and not self.config.notes.preload
         self.config = config
         appearance.apply(config.ui.appearance)
         self.check_setup()
+        if turned_on:
+            self._preload_notes()
         self._engine.configure(config)
         self._prefetch_icons()
         self._file_watcher.configure(IndexSettings.from_config(config.files))
@@ -334,7 +349,7 @@ class LauncherApp(Adw.Application):
     def open_note(self, path: str) -> None:
         argv = [sys.executable, "-m", "launcher", "--notes", "--open", path]
         token = self._launch_context().get_startup_notify_id(None, []) or None
-        launching.spawn(argv, APP_ID + ".Notes", token)
+        launching.spawn(argv, NOTES_APP_ID, token)
 
     def run_item(self, item_id: str) -> None:
         """What a per-item hotkey runs: `launcher --run app:<id>` / `quicklink:<name>`."""
@@ -458,6 +473,14 @@ class LauncherApp(Adw.Application):
         if self.window is not None:
             self.window.refresh_layout()
             self.check_setup()
+
+    def _preload_notes(self) -> bool:
+        """Start Notes hidden (`[notes] preload`); a running Notes ignores this."""
+        log.info("starting Notes in the background")
+        launching.spawn(
+            [sys.executable, "-m", "launcher", "--notes", "--background"], NOTES_APP_ID, None
+        )
+        return GLib.SOURCE_REMOVE
 
     def _show_status(self) -> None:
         self.window.hide_launcher()

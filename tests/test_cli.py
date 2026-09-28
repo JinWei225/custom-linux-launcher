@@ -54,3 +54,37 @@ def test_run_action():
 def test_settings_flags():
     args = parse_args(["--settings", "--edit", "quicklink:GitHub"])
     assert args.settings and args.edit == "quicklink:GitHub"
+
+
+def test_notes_commands_talk_to_a_running_notes(monkeypatch):
+    import launcher.notes.app as notes_app
+    from launcher import NOTES_APP_ID
+    from launcher.__main__ import main
+    from launcher.client import SendStatus
+
+    sent, started = [], []
+    monkeypatch.setattr(
+        "launcher.client.send", lambda *a, **k: (sent.append((a, k)), SendStatus.SENT)[1]
+    )
+    monkeypatch.setattr(notes_app, "run_notes", lambda *a, **k: started.append((a, k)))
+    for argv, request in [
+        (["--notes"], ("toggle", None)),
+        (["--notes", "--open", "FYP/Week 3.md"], ("open-note", "FYP/Week 3.md")),
+        (["--notes", "--new", "Lecture 4"], ("new-note", "Lecture 4")),
+        (["--notes", "--background"], ("preload", None)),  # never shows a running Notes
+    ]:
+        sent.clear()
+        assert main(argv) == 0
+        assert sent == [(request, {"app_id": NOTES_APP_ID})]
+    assert started == []
+
+    monkeypatch.setattr("launcher.client.send", lambda *a, **k: SendStatus.NOT_RUNNING)
+    main(["--notes", "--background"])
+    assert started == [((None, None), {"background": True})]  # not running: start it hidden
+
+
+def test_notes_object_path():
+    cmd = build_command("toggle", None, {}, app_id=APP_ID + ".Notes")
+    assert cmd[cmd.index("--dest") + 1] == "io.github.jinwei.Launcher.Notes"
+    assert cmd[cmd.index("--object-path") + 1] == "/io/github/jinwei/Launcher/Notes"
+    assert build_command("toggle", None, {})[6] == OBJECT_PATH
