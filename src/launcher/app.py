@@ -19,7 +19,7 @@ gi.require_version("GLibUnix", "2.0")
 gi.require_version("GioUnix", "2.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GLibUnix, Gtk  # noqa: E402
 
-from . import APP_ID, launching, paths, shortcuts  # noqa: E402
+from . import APP_ID, appearance, launching, paths, shortcuts  # noqa: E402
 from .clipboard_recorder import ClipboardRecorder  # noqa: E402
 from .clipboard_store import ClipboardStore, app_matches  # noqa: E402
 from .config import (  # noqa: E402
@@ -101,6 +101,7 @@ class LauncherApp(Adw.Application):
             self.config, problems = load_config(paths.config_file())
         except ConfigError as e:
             problems = [f"{e} (using defaults)"]
+        appearance.apply(self.config.ui.appearance)
 
         self._usage = UsageStore(paths.data_dir() / "launcher.db")
         self._favicons = FaviconCache(
@@ -239,6 +240,7 @@ class LauncherApp(Adw.Application):
         for w in warnings:
             log.warning("config: %s", w)
         self.config = config
+        appearance.apply(config.ui.appearance)
         self._engine.configure(config)
         self._prefetch_icons()
         self._file_watcher.configure(IndexSettings.from_config(config.files))

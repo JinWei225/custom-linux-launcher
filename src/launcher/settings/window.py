@@ -21,9 +21,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from .. import APP_ID, OBJECT_PATH, currency, launching, paths, shortcuts  # noqa: E402
+from .. import APP_ID, OBJECT_PATH, appearance, currency, launching, paths, shortcuts  # noqa: E402
 from ..clipboard_store import read_counts  # noqa: E402
-from ..config import Config, ConfigError  # noqa: E402
+from ..config import APPEARANCES, Config, ConfigError  # noqa: E402
 from ..config_writer import ConfigWriter  # noqa: E402
 from ..favicons import domain_of  # noqa: E402
 from ..importers import espanso_base, import_espanso, read_espanso  # noqa: E402
@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 
 SAVE_DELAY_MS = 500  # spin buttons: save once the value settles
 RELOAD_DELAY_MS = 300
+APPEARANCE_LABELS = {"system": "Follow System", "light": "Light", "dark": "Dark"}
 
 
 class SettingsWindow(Adw.ApplicationWindow):
@@ -174,6 +175,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self._refresh_pages()
 
     def _refresh_pages(self) -> None:
+        appearance.apply(self.config.ui.appearance)
         for page in self._pages:
             page.refresh(self.config)
 
@@ -250,6 +252,16 @@ class GeneralPage(_Page):
 
     def __init__(self, window: SettingsWindow) -> None:
         super().__init__(window, "General", "preferences-system-symbolic")
+        style = Adw.PreferencesGroup(title="Appearance")
+        self._appearance = Adw.ComboRow(
+            title="Style",
+            subtitle="For the launcher, Launcher Settings and Notes",
+            model=Gtk.StringList.new([APPEARANCE_LABELS[a] for a in APPEARANCES]),
+        )
+        self._appearance.connect("notify::selected", self._on_appearance)
+        style.add(self._appearance)
+        self.add(style)
+
         group = Adw.PreferencesGroup(title="Launcher Window")
         self._width = Adw.SpinRow.new_with_range(400, 1600, 10)
         self._width.set_title("Width")
@@ -320,6 +332,7 @@ class GeneralPage(_Page):
     def refresh(self, config: Config) -> None:
         self._loading = True
         self._notes_folder.set_subtitle(config.notes.folder)
+        self._appearance.set_selected(APPEARANCES.index(config.ui.appearance))
         self._width.set_value(config.ui.width)
         self._rows.set_value(config.ui.max_results)
         self._hide.set_active(config.ui.hide_on_focus_loss)
@@ -329,6 +342,10 @@ class GeneralPage(_Page):
     def _spin(self, key: str, row: Adw.SpinRow) -> None:
         value = int(row.get_value())
         self._save_later(key, lambda w: w.set_value("ui", key, value))
+
+    def _on_appearance(self, row: Adw.ComboRow, _pspec) -> None:
+        value = APPEARANCES[row.get_selected()]
+        self._save_now(lambda w: w.set_value("ui", "appearance", value))
 
     def _switch(self, key: str, row: Adw.SwitchRow) -> None:
         value = row.get_active()

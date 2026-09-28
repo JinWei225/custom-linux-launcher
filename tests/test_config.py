@@ -54,6 +54,9 @@ def test_unknown_keys_warn():
         {"hide_on_focus_loss": 1},  # int must not pass as bool
         {"width": 100},  # out of range
         {"max_results": 50},
+        {"appearance": "blue"},
+        {"appearance": "Dark"},  # exact words only
+        {"appearance": 1},
     ],
 )
 def test_invalid_values_raise(ui):
@@ -153,3 +156,9 @@ def test_hotkey_and_name_rules(data, message):
 def test_unknown_quicklink_key_warns():
     _, warnings = parse_config({"quicklink": [{"name": "x", "url": "https://a", "kw": "x"}]})
     assert warnings == ["unknown setting 'quicklink[1].kw' ignored"]
+
+
+def test_appearance():
+    assert UIConfig().appearance == "system"
+    for value in ("system", "light", "dark"):
+        assert parse_config({"ui": {"appearance": value}})[0].ui.appearance == value

@@ -181,6 +181,14 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - **Autosave:** 1 s after typing stops, as soon as another window is focused, on switching notes and on closing; nothing is written if the text is unchanged.
 - **Extras:** outline of headings, export to PDF, notes in the launcher's search.
 
+
+### ✅ D12 — Polish (M8) — **decided 2026-09-28**
+- **Appearance:** one System / Light / Dark setting (`[ui] appearance`) for the launcher, Launcher Settings and Notes, applied live.
+- **Setup check:** `launcher --doctor` and a Status page in Launcher Settings check the helper extension, espanso, python3-gi-cairo, shortcuts, the notes folder and exchange rates, each with a fix. `make install` runs it and prints problems (never fails the install).
+- **Setup problems in the launcher:** the banner shows them too, not only config mistakes.
+- **Crash notice:** after systemd restarts a crashed service, one notification; its button opens Settings → Status with the crash's log lines.
+- **README:** a public GitHub page with screenshots from the nested shell; MIT license.
+- **Stability:** no soak test; you report issues from daily use.
 ---
 
 ## 4. Behaviour details
@@ -330,6 +338,10 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 - **Launcher search:** notes appear in the main search (`all` mode, after snippets), matched by title or file name with the usual fuzzy scoring; the subtitle is the folder and when it was edited. Enter opens the note in Notes (`launcher --notes --open <path>`, with the activation token, so a running Notes window comes to the front); Alt+Enter shows the file in the file manager. The folder is rescanned at most once a second while typing, and `NotesStore` re-reads a note's title only when its mtime or size changed. Titles read as the note does: inline markers are dropped (`## Week 2 **labs**` → "Week 2 labs") in the sidebar, the header and the launcher. The Notes window's title names the open note ("Lecture 3 – Notes") for Alt+Tab and the overview.
 - **PDF export:** "Export to PDF…" in the note's menu or Ctrl+Shift+E asks where to save (`<note>.pdf`, first in Documents, then the last folder used). `notes/pdf.py` lays the note out on A4 with Pango and draws it with cairo, line by line as the editor shows it: headings (the PDF's bookmarks, nested by level, kept with the next lines), bullets by depth, numbers in the gutter, checkboxes (ticked ones struck through), quote bars, rules, code blocks on a grey background (nothing styled inside), inline styles, pictures scaled to the column (at most 420 pt tall; a missing or web picture prints its link, dimmed) and page numbers. Long paragraphs break between lines across pages. Web links are clickable; links to notes or files aren't (they only open inside Notes). The UI font is used, so CJK text prints. It is written to a temporary file and renamed, so a failed export leaves an existing PDF alone; a toast offers to open it. Needs the system package `python3-gi-cairo` (PyGObject's cairo bridge, which `apt autoremove` once removed): Notes checks for it before asking where to save and says what to install, `make install` warns when it is missing, and any other export error is shown as a toast rather than failing silently.
 - **Tests:** `tests/test_notes_pdf.py` (the text as it reads with no markup, pdfinfo metadata and A4, clickable web links only, bookmarks, a long note over several pages, a large picture, an empty note, unwritable path and a failed export keeping the old file); `tools/nested_notes_input_test.py` (the menu item, Ctrl+Shift+E, a real export with the note's picture, the Open toast, the remembered folder, a failure toast); the real save dialog was checked to open in the nested shell. `tests/test_notes_provider.py` (title and file-name matches, hidden and attachment files skipped, open/reveal, the 1 s rescan with a fake clock, a changed title, a missing folder, only changed notes re-read); `tools/nested_e2e_test.py` (typing "fourier" in the real launcher and pressing Enter opens that note's Notes window). `tests/test_notes_markdown.py` (`plain_text`, `outline`, `section_at`); `tools/nested_notes_input_test.py` (Ctrl+Shift+O, the list and selection, no scrolling for a short list, Down + Enter and a real click jump and scroll, typing continues in the editor).
+
+### 4.7 Polish (M8, see D12)
+- **Appearance** (built 2026-09-28): `[ui] appearance = "system" | "light" | "dark"` (Settings → General → Appearance → Style). Each process sets libadwaita's colour scheme from it (`appearance.py`): the launcher on start and config reload, Launcher Settings whenever it loads or saves the file, Notes on start and through its own watch on the config folder. "system" follows GNOME's Style setting live. An invalid value is a config error, so the last good appearance stays.
+- **Tests:** `tests/test_config.py`, `tests/test_config_writer.py` (values, validation, round trip into an older config); `tools/nested_appearance_test.py` (14 checks: Notes follows a change written by another process and recolours its text, System follows GNOME's dark style both ways, an invalid value changes nothing, the Style row shows the choice, applies at once and saves, Light overrides a dark GNOME); `tools/nested_e2e_test.py` (the running launcher turns dark and back).
 ---
 
 ## 5. Project layout
@@ -402,7 +414,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
 | **M6** ✅ | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **Built 2026-09-28:** ~350 new unit tests; 26/26 end-to-end checks in a nested shell; waiting on your daily-use check |
 | **M7** | Notes: live-markdown editor, sidebar, autosave, outline, PDF, launcher search | ✅ D11 | Taking a full lecture's notes needs no manual save and no markdown syntax on screen. **Built 2026-09-28:** parts 1 (window, storage, sidebar, autosave), 2 (live block formatting), 3 (inline styles, links, pictures) and 4 (outline, launcher search, PDF export); clicks and hovering on lines with hidden markup fixed; waiting on your check |
-| **M8** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
+| **M8** | Polish: themes, error notifications, README | ✅ D12 | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)
 - Providers are plain Python with no GTK imports, so they can be unit tested without a display.
@@ -439,3 +451,4 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | D9 | Autostart/packaging | systemd --user service + uv | 2026-09-24 | |
 | D10 | Converters | Auto-detect in main search; Enter copies / Alt+Enter pastes; own English date parser; open.er-api.com with disk cache; home currency only; 12/24 h from GNOME; Settings page | 2026-09-28 | Fixed-date holidays only |
 | D11 | Notes | Native GtkTextView live preview; .md files in ~/Notes; folders + pinned/recent; normal window, Super+Shift+N; autosave on pause and focus loss | 2026-09-28 | Part 1 built |
+| D12 | Polish | One System/Light/Dark setting; setup check (`--doctor`, Status page, after install); setup problems in the launcher; crash notice; public README, MIT | 2026-09-28 | Stability issues reported from daily use |

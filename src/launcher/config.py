@@ -25,6 +25,10 @@ class UIConfig:
     max_results: int = 8
     hide_on_focus_loss: bool = True
     favicons: bool = True
+    appearance: str = "system"  # system (follow GNOME), light or dark
+
+
+APPEARANCES = ("system", "light", "dark")
 
 
 @dataclass(frozen=True)
@@ -181,6 +185,7 @@ width = 680               # window width in pixels (400-1600)
 max_results = 8           # rows shown at once (1-20)
 hide_on_focus_loss = true # hide the launcher when another window gets focus
 favicons = true           # website icons for quicklinks (fetched via Google's favicon service)
+appearance = "system"     # "system" (follow GNOME), "light" or "dark": launcher, Settings, Notes
 
 # File search (Super+Shift+F, or `launcher --mode files`).
 [files]
@@ -303,6 +308,7 @@ def parse_config(
         )
     config = _build(Config, data, "", warnings)
     _check_links_and_aliases(config)
+    _check_ui(config)
     _check_converters(config)
     _check_notes(config)
     _check_snippets(config)
@@ -445,6 +451,13 @@ def _check_links_and_aliases(config: Config) -> None:
     names = [link.name.casefold() for link in config.quicklinks]
     if len(set(names)) != len(names):
         raise ConfigError("two quicklinks have the same name; names must be unique")
+
+
+def _check_ui(config: Config) -> None:
+    if config.ui.appearance not in APPEARANCES:
+        raise ConfigError(
+            f'ui.appearance must be "system", "light" or "dark", got {config.ui.appearance!r}'
+        )
 
 
 def _check_notes(config: Config) -> None:

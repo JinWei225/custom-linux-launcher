@@ -22,7 +22,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
-from .. import paths  # noqa: E402
+from .. import appearance, paths  # noqa: E402
 from ..config import Config, ConfigError, load_config  # noqa: E402
 from ..notes_markdown import Heading, section_at  # noqa: E402
 from ..notes_store import NotesError, NoteSession, NotesStore, flatten  # noqa: E402
@@ -77,6 +77,7 @@ class NotesWindow(Adw.ApplicationWindow):
         except ConfigError as e:
             log.warning("config: %s (using the default notes folder)", e)
             config = Config()
+        appearance.apply(config.ui.appearance)
         self.store = NotesStore(notes_folder(config), trash=_trash)
         self.store.ensure()
         self.session: NoteSession | None = None
@@ -87,6 +88,8 @@ class NotesWindow(Adw.ApplicationWindow):
         self._monitors: dict[str, Gio.FileMonitor] = {}
         self._surface: Gdk.Surface | None = None
         self._focused = False
+        self._config_source = 0
+        self._config_monitor = self._watch_config()
 
         self._load_css()
         self._build()
@@ -479,6 +482,35 @@ class NotesWindow(Adw.ApplicationWindow):
             log.warning("cannot save the notes window state: %s", e)
 
     # --- changes made by other apps -------------------------------------------------------
+
+    def _watch_config(self) -> Gio.FileMonitor | None:
+        """Follow Launcher Settings' Appearance choice while open."""
+        directory = Gio.File.new_for_path(str(paths.config_dir()))
+        try:
+            monitor = directory.monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        except GLib.Error as e:
+            log.warning("cannot watch the config folder: %s", e.message)
+            return None
+        monitor.connect("changed", self._on_config_event)
+        return monitor
+
+    def _on_config_event(self, _monitor, file: Gio.File, other, _event) -> None:
+        name = paths.config_file().name
+        if file.get_basename() != name and (other is None or other.get_basename() != name):
+            return
+        if self._config_source:
+            GLib.source_remove(self._config_source)
+        self._config_source = GLib.timeout_add(DISK_CHANGE_DELAY_MS, self._on_config_changed)
+
+    def _on_config_changed(self) -> bool:
+        self._config_source = 0
+        try:
+            config, _ = load_config(paths.config_file())
+        except ConfigError as e:
+            log.warning("config: %s (keeping the current appearance)", e)
+            return GLib.SOURCE_REMOVE
+        appearance.apply(config.ui.appearance)
+        return GLib.SOURCE_REMOVE
 
     def _watch(self, folders: list[str]) -> None:
         wanted = set(folders)

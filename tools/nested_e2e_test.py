@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -376,6 +377,30 @@ def run(daemon_log: str) -> int:
         left == {"first entry from the app", "<image>"},
         f"{before} -> {sorted(left)}",
     )
+
+    # 6b. Appearance: the running launcher follows [ui] appearance when the file changes.
+    def background(appearance: str) -> tuple[int, int, int] | None:
+        text = CONFIG.read_text()
+        CONFIG.write_text(re.sub(r'appearance = "\w+"', f'appearance = "{appearance}"', text))
+        time.sleep(1.0)
+        launcher("--show", "--mode", "all")
+        time.sleep(0.6)
+        shot = Path(os.environ["XDG_CACHE_HOME"]) / f"appearance-{appearance}.png"
+        action("debug-snapshot", str(shot))
+        wait_for(shot.exists, 3)
+        launcher("--hide")
+        time.sleep(0.3)
+        if not shot.exists():
+            return None
+        pixels = GdkPixbuf.Pixbuf.new_from_file(str(shot)).get_pixels()
+        return tuple(pixels[:3])  # the top-left corner: window background
+
+    dark = background("dark")
+    check("appearance = dark turns the launcher dark", dark is not None and max(dark) < 80,
+          repr(dark))  # fmt: skip
+    light = background("system")
+    check("appearance = system follows GNOME (light)", light is not None and min(light) > 200,
+          repr(light))  # fmt: skip
 
     # 7. Notes are found by title; Enter opens the note in Notes (last: it takes focus).
     NOTES.mkdir(parents=True, exist_ok=True)

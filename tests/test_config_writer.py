@@ -142,3 +142,15 @@ def test_invalid_converter_settings_write_nothing(writer):
     with pytest.raises(ConfigError):
         writer.set_value("converters", "refresh_hours", 0)
     assert writer.path.read_text() == before
+
+
+def test_appearance_round_trip(writer):
+    # An older config has no appearance key: Settings adds it under [ui].
+    config = writer.set_value("ui", "appearance", "dark")
+    assert config.ui.appearance == "dark"
+    assert load_config(writer.path)[0].ui.appearance == "dark"
+    assert "width = 680  # inline comment stays" in writer.path.read_text()
+    before = writer.path.read_text()
+    with pytest.raises(ConfigError):
+        writer.set_value("ui", "appearance", "sepia")
+    assert writer.path.read_text() == before
