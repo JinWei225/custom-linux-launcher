@@ -304,6 +304,17 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 - **Trash:** via GIO; if the Trash isn't available (e.g. notes on a system mount) the note stays and a toast says why.
 - **Tests:** `tests/test_notes_store.py` (titles, names, tree, create/save/rename/move/delete, folders, pins, NoteSession rules, config). `tools/nested_notes_test.py` drives the real window in the nested shell (34 checks: menus show every item and survive a refresh, pause autosave and rename, save on focus loss, no write when unchanged, pins, folders, reload vs conflict banner, empty-note discard, Trash success and failure, close/restore, narrow layout, single instance).
 
+**Part 2 — live block formatting** (built 2026-09-28; `notes_markdown.py` pure, `notes/editor.py`):
+- The buffer always holds the plain markdown; saving writes exactly that. After each change every line is classified (heading, bullet, task, ordered, quote, rule, fence, code; code fences and list nesting span lines) and only lines whose text or kind changed are re-tagged (~1 ms for a few hundred lines, 15 ms for 6000).
+- **Headings** `#`–`###` (4–6 look like 3): bigger bold text; `## ` is dimmed on the cursor's line and hidden elsewhere. `#` without a space stays text.
+- **Lists:** `- `/`* `/`+ ` bullets (drawn •, ◦, ▪ by depth), `1. `/`1) ` numbers (kept visible, bold), `- [ ] ` checkboxes (drawn; ticked ones struck through), `[] `/`[ ] `/`- [] ` typed at a line start become `- [ ] `. Markers are hidden and never hold the cursor (Home or an arrow key into one moves to the text). Nesting depth follows the file's own indentation (tabs, 2 or 4 spaces); Tab adds a tab like Obsidian.
+- **Keys:** Enter continues a list or quote (the next number, an unticked box); Enter on an empty item outdents it, or ends the list at the top level; Tab / Shift+Tab indent / outdent the selected items; Backspace at the start of an item's text outdents it or drops its marker (and turns a heading back into text); Ctrl+Enter or a click ticks a checkbox. While an input method is composing, these keys are left to it.
+- **Numbering:** ordered lists around the edited lines renumber from their first item (deeper items and blank lines don't break a list; a paragraph or bullet does). Opening a note never rewrites it.
+- **Blocks:** `> ` quotes (accent bar, italic), `---`/`***`/`___` rules (drawn; the text shows on the cursor's line), fenced code (monospace on a rounded background; fences dimmed; `` ``` `` + Enter adds the closing fence and puts the cursor inside; nothing inside is formatted).
+- **Undo:** automatic edits (renumbering, `[] `) are made in the buffer's `end-user-action` handler, before GTK closes the undo step, so one Ctrl+Z undoes a keystroke together with them; undo/redo themselves never trigger new automatic edits. Editing inside `changed` was unsafe (a deletion is still in progress there).
+- **Drawing:** bullets, checkboxes, quote bars, rules and code backgrounds are painted in `snapshot_layer(BELOW_TEXT)` in buffer coordinates; indents are tag margins that include the centring margin (a tag's left margin replaces the view's, it doesn't add to it), updated when the window is resized.
+- **Tests:** `tests/test_notes_markdown.py` (51: kinds, markers, code fences, nesting, continuation, indent, markers, checkbox, shorthand, renumbering). `tools/nested_notes_editor_test.py` types into the real editor in the nested shell (41 checks: every rule above, one-step undo, checkbox click, IME composing, CJK, no rewrite on open, saved text).
+
 ---
 
 ## 5. Project layout
@@ -337,7 +348,8 @@ linux-launcher/
 │   ├── clipboard_recorder.py     # ClipboardChanged → store, privacy rules, thumbnails
 │   ├── settings/                 # Launcher Settings app (window, dialogs, debug renderer)
 │   ├── notes_store.py            # notes on disk: tree, save/rename, pins, NoteSession (pure)
-│   ├── notes/                    # Notes app: app.py (single instance), window.py, sidebar.py
+│   ├── notes_markdown.py         # markdown line kinds and editing rules (pure)
+│   ├── notes/                    # Notes app: app.py, window.py, sidebar.py, editor.py
 │   └── providers/
 │       ├── base.py               # Result, Provider and Host protocols
 │       ├── commands.py           # built-in: reload config, open config, quit
@@ -374,7 +386,7 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | **M4** ✅ | Shell extension; clipboard history (text and images), preview pane, pin, delete, direct paste | ✅ D4, D7 | Copying an image in Firefox → Super+V → Enter pastes it into a chat app. **Built 2026-09-24:** 13/13 extension and 12/12 end-to-end checks in a nested shell; waiting on your first login with the extension |
 | **M5** ✅ | Snippets: launcher search and paste; espanso YAML generation; placeholders | ✅ D3 | `;sig` expands in every app; the same snippet can be pasted from the launcher. **Built 2026-09-24:** 20/20 end-to-end and 14/14 extension checks in a nested shell; espanso loads the generated file; waiting on your check and a new login for extension v2 |
 | **M6** ✅ | Converters: dates in words, timezones, currency, Settings page | ✅ D10 | `tomorrow`, `3pm tokyo` and `100 usd` answer in the main launcher, currency works offline from cached rates. **Built 2026-09-28:** ~350 new unit tests; 26/26 end-to-end checks in a nested shell; waiting on your daily-use check |
-| **M7** | Notes: live-markdown editor, sidebar, autosave, outline, PDF, launcher search | ✅ D11 | Taking a full lecture's notes needs no manual save and no markdown syntax on screen. **In progress 2026-09-28:** part 1 (window, storage, sidebar, autosave) built |
+| **M7** | Notes: live-markdown editor, sidebar, autosave, outline, PDF, launcher search | ✅ D11 | Taking a full lecture's notes needs no manual save and no markdown syntax on screen. **In progress 2026-09-28:** parts 1 (window, storage, sidebar, autosave) and 2 (live block formatting) built |
 | **M8** | Polish: themes, error notifications, README | — | Used daily for 2 weeks with no restarts needed |
 
 ### Stability rules (apply throughout)

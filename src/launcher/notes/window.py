@@ -24,13 +24,13 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 from .. import paths  # noqa: E402
 from ..config import Config, ConfigError, load_config  # noqa: E402
 from ..notes_store import NotesError, NoteSession, NotesStore, flatten  # noqa: E402
+from .editor import MarkdownEditor  # noqa: E402
 from .sidebar import Sidebar, SidebarRow  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 AUTOSAVE_DELAY_MS = 1000
 DISK_CHANGE_DELAY_MS = 300
-MAX_TEXT_WIDTH = 820  # the text column; wider windows get side margins
 NARROW = "max-width: 640sp"  # e.g. half a laptop screen beside slides: overlay sidebar
 
 CSS = """
@@ -59,39 +59,6 @@ def _trash(path: Path) -> None:
 
 def notes_folder(config: Config) -> Path:
     return Path(os.path.expanduser(config.notes.folder))
-
-
-class Editor(Gtk.TextView):
-    """A text view that keeps its text in a centred column of at most MAX_TEXT_WIDTH.
-
-    It stays the scrollable child itself (not inside an Adw.Clamp), so it keeps
-    scrolling to the cursor while typing at the bottom."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            wrap_mode=Gtk.WrapMode.WORD_CHAR,
-            top_margin=24,
-            bottom_margin=120,
-            left_margin=32,
-            right_margin=32,
-            pixels_below_lines=6,
-            pixels_inside_wrap=2,
-        )
-        self.add_css_class("notes-editor")
-        self._pending_margin = 0
-
-    def do_size_allocate(self, width: int, height: int, baseline: int) -> None:
-        margin = max(32, (width - MAX_TEXT_WIDTH) // 2)
-        if margin != self.get_left_margin() and not self._pending_margin:
-            # Changing margins inside an allocation would re-enter it: do it next frame.
-            def apply() -> bool:
-                self._pending_margin = 0
-                self.set_left_margin(margin)
-                self.set_right_margin(margin)
-                return GLib.SOURCE_REMOVE
-
-            self._pending_margin = GLib.idle_add(apply)
-        Gtk.TextView.do_size_allocate(self, width, height, baseline)
 
 
 class NotesWindow(Adw.ApplicationWindow):
@@ -174,8 +141,8 @@ class NotesWindow(Adw.ApplicationWindow):
         self._banner = Adw.Banner(button_label="Reload")
         self._banner.connect("button-clicked", lambda _b: self._reload_from_disk())
 
-        self.editor = Editor()
-        self.buffer = self.editor.get_buffer()
+        self.editor = MarkdownEditor()
+        self.buffer = self.editor.buffer
         self.buffer.connect("changed", self._on_changed)
         scroller = Gtk.ScrolledWindow(child=self.editor, vexpand=True)
 
@@ -332,9 +299,7 @@ class NotesWindow(Adw.ApplicationWindow):
     def _show_session(self, session: NoteSession, cursor_at_end: bool = False) -> None:
         self.session = session
         self._loading = True
-        self.buffer.begin_irreversible_action()  # undo can't go back past the loaded text
-        self.buffer.set_text(session.saved_text)
-        self.buffer.end_irreversible_action()
+        self.editor.load_text(session.saved_text)  # not undoable, never rewritten on load
         self._loading = False
         where = self.buffer.get_end_iter() if cursor_at_end else self.buffer.get_start_iter()
         self.buffer.place_cursor(where)
@@ -400,8 +365,7 @@ class NotesWindow(Adw.ApplicationWindow):
         self._save_source = GLib.timeout_add(AUTOSAVE_DELAY_MS, fire)
 
     def _text(self) -> str:
-        start, end = self.buffer.get_bounds()
-        return self.buffer.get_text(start, end, True)
+        return self.editor.text()  # the plain markdown, hidden markers included
 
     def _update_title(self) -> None:
         if self.session is None:
@@ -526,7 +490,7 @@ class NotesWindow(Adw.ApplicationWindow):
             self.toast(str(e))
             return
         self._loading = True
-        self.buffer.set_text(text)
+        self.editor.load_text(text)
         self._loading = False
         self.buffer.place_cursor(self.buffer.get_iter_at_offset(min(offset, len(text))))
         self._banner.set_revealed(False)

@@ -75,6 +75,7 @@ def sidebar_rows(window: NotesWindow) -> list[tuple[str, str]]:
 
 def open_menu(window: NotesWindow, kind: str, label: str) -> Gtk.PopoverMenu | None:
     """Right-click the first sidebar row of this kind and label; returns its menu."""
+    pump(0.2)  # let a just-rebuilt sidebar lay out its rows first
     i = 0
     while (row := window.sidebar.list.get_row_at_index(i)) is not None:
         if (row.kind, row.label) == (kind, label):
