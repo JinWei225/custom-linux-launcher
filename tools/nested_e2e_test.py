@@ -134,9 +134,12 @@ def main() -> int:
 
 
 def run(daemon_log: str) -> int:
-    time.sleep(2.5)
-    log_text = Path(daemon_log).read_text()
-    check("daemon sees the helper extension", "Launcher Helper extension v2 is active" in log_text)
+    # The daemon indexes files before it starts, which can take a few seconds.
+    active = wait_for(
+        lambda: "Launcher Helper extension v2 is active" in Path(daemon_log).read_text(),
+        seconds=15,
+    )
+    check("daemon sees the helper extension", active)
     check(
         "espanso gets the snippets with a trigger",
         ESPANSO.exists() and ";hi" in ESPANSO.read_text() and "Plain" not in ESPANSO.read_text(),
@@ -275,8 +278,10 @@ def run(daemon_log: str) -> int:
     # Settings' "Refresh Now": the daemon downloads (or, offline, logs why it couldn't).
     action("refresh-rates")
     downloaded = wait_for(
-        lambda: json.loads(RATES.read_text())["fetched"] > rates_written
-        or "exchange rates not available" in Path(daemon_log).read_text(),
+        lambda: (
+            json.loads(RATES.read_text())["fetched"] > rates_written
+            or "exchange rates not available" in Path(daemon_log).read_text()
+        ),
         seconds=15,
     )
     check("refresh-rates action downloads rates", downloaded)
