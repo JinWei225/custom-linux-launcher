@@ -13,7 +13,7 @@ import os
 import subprocess
 from collections.abc import Mapping
 
-from . import APP_ID, OBJECT_PATH
+from . import APP_ID
 
 TIMEOUT_SECONDS = 3
 
@@ -29,7 +29,10 @@ def gvariant_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-def build_command(action: str, param: str | None, env: Mapping[str, str]) -> list[str]:
+def build_command(
+    action: str, param: str | None, env: Mapping[str, str], app_id: str = APP_ID
+) -> list[str]:
+    """`gdbus` activating an action of a running app (the launcher, or Notes)."""
     # Forward the activation token so GNOME lets the window take focus.
     platform = []
     if token := env.get("XDG_ACTIVATION_TOKEN"):
@@ -40,15 +43,15 @@ def build_command(action: str, param: str | None, env: Mapping[str, str]) -> lis
     params = f"[<{gvariant_string(param)}>]" if param is not None else "@av []"
     return [
         "gdbus", "call", "--session",
-        "--dest", APP_ID,
-        "--object-path", OBJECT_PATH,
+        "--dest", app_id,
+        "--object-path", "/" + app_id.replace(".", "/"),  # as Gio.Application exports it
         "--method", "org.gtk.Actions.Activate",
         gvariant_string(action), params, platform_data,
     ]  # fmt: skip
 
 
-def send(action: str, param: str | None) -> SendStatus:
-    cmd = build_command(action, param, os.environ)
+def send(action: str, param: str | None, app_id: str = APP_ID) -> SendStatus:
+    cmd = build_command(action, param, os.environ, app_id)
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT_SECONDS)
     except FileNotFoundError:

@@ -22,6 +22,7 @@ const IFACE = `
       <arg type="s" name="title" direction="in"/>
       <arg type="ai" name="rect" direction="out"/>
     </method>
+    <method name="FocusedTitle"><arg type="s" name="title" direction="out"/></method>
   </interface>
 </node>`;
 
@@ -70,5 +71,9 @@ export default class NestedInput {
             return [-1, -1, 0, 0];
         const r = actor.meta_window.get_frame_rect();
         return [r.x, r.y, r.width, r.height];
+    }
+
+    FocusedTitle() {
+        return global.display.focus_window?.get_title() ?? '';
     }
 }

@@ -110,6 +110,22 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if any(c.status == ERROR for c in checks) else 0
 
     if args.notes:
+        # Notes already running: ask it over D-Bus, without loading GTK (~0.4 s).
+        from . import NOTES_APP_ID
+        from .client import SendStatus, send
+
+        if args.open:
+            request = ("open-note", args.open)
+        elif args.new is not None:
+            request = ("new-note", args.new)
+        else:
+            request = ("toggle", None)
+        status = send(*request, app_id=NOTES_APP_ID)
+        if status is SendStatus.SENT:
+            return 0
+        if status is SendStatus.TIMEOUT:
+            print("launcher: Notes is not responding", file=sys.stderr)
+            return 1
         from .notes.app import run_notes
 
         return run_notes(args.open, args.new)

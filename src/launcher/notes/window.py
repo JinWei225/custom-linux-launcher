@@ -1,9 +1,9 @@
 """The Notes window: a hideable sidebar of notes and folders, and the editor.
 
 Saving is automatic: 1 s after typing stops, as soon as another window gets focus,
-when switching notes and when the window closes. Nothing is written if the text hasn't
-changed. Text an input method is still composing isn't in the buffer yet; it is saved
-once committed.
+when switching notes and when the window closes (it hides; Notes keeps running until
+Ctrl+Q). Nothing is written if the text hasn't changed. Text an input method is still
+composing isn't in the buffer yet; it is saved once committed.
 """
 
 from __future__ import annotations
@@ -102,6 +102,7 @@ class NotesWindow(Adw.ApplicationWindow):
             self._show_empty()
 
         self.connect("realize", self._on_realize)
+        self.set_hide_on_close(True)
         self.connect("close-request", self._on_close_request)
 
     # --- building ------------------------------------------------------------------------
@@ -461,9 +462,32 @@ class NotesWindow(Adw.ApplicationWindow):
             self.save_now()
 
     def _on_close_request(self, *_args) -> bool:
+        # Closing hides the window (hide-on-close): Notes keeps running, so it comes back
+        # at once. The note stays open; Ctrl+Q (shut_down) closes it and quits.
+        self.save_now()
+        self._save_state()
+        return False
+
+    def toggle(self) -> None:
+        """Super+Shift+N: hide Notes if it is the focused window, else bring it up."""
+        if self.get_visible() and self._focused:
+            self.close()
+        else:
+            self.bring_to_front()
+
+    def bring_to_front(self) -> None:
+        if self.get_visible() and not self._focused:
+            # Behind another window. GNOME won't raise an open window for a request
+            # without an activation token (the shortcut has none), but gives focus to a
+            # window that is shown anew, as it does for the launcher.
+            self.save_now()
+            self.set_visible(False)
+        self.present()
+
+    def shut_down(self) -> None:
+        """Before quitting: save (or drop an empty new note) and remember the layout."""
         self._leave_note()
         self._save_state()
-        return False  # let it close
 
     def _save_state(self) -> None:
         width, height = self.get_default_size()
