@@ -21,7 +21,6 @@ from .. import NOTES_APP_ID  # noqa: E402
 log = logging.getLogger(__name__)
 
 
-
 class NotesApp(Adw.Application):
     """Once open, Notes keeps running with its window hidden, so it comes back at once.
 

@@ -34,6 +34,11 @@ OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "screenshots"
 # A made-up home, so file search shows "~/Documents/…" rather than a temporary path.
 HOME = Path(os.environ["XDG_DATA_HOME"]).parent / "home"
 os.environ["HOME"] = str(HOME)  # for this process (Notes, Settings) and the daemon
+# The session's config folder, reached as ~/.config so Settings shows that path.
+HOME.mkdir(parents=True, exist_ok=True)
+if not (HOME / ".config").exists():
+    (HOME / ".config").symlink_to(os.environ["XDG_CONFIG_HOME"])
+os.environ["XDG_CONFIG_HOME"] = str(HOME / ".config")
 NOTES = HOME / "Notes"
 FILES = HOME / "Documents"
 

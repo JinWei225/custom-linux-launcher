@@ -52,7 +52,7 @@ APPEARANCE_LABELS = {"system": "Follow System", "light": "Light", "dark": "Dark"
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
         super().__init__(application=app, title="Launcher Settings")
-        self.set_default_size(1140, 720)  # wide enough for all 8 page names
+        self.set_default_size(1000, 720)
         self.writer = ConfigWriter(paths.config_file())
         self.config = Config()
         self._apps: list[AppEntry] | None = None
@@ -60,18 +60,29 @@ class SettingsWindow(Adw.ApplicationWindow):
         self._written: dict[str, float] = {}  # file name -> mtime of our last write
         self._reload_source = 0
 
+        # Pages in a sidebar (like GNOME Settings); below 720sp wide it becomes a list
+        # that leads to one page at a time.
         self._banner = Adw.Banner(button_label="Open Config File")
         self._banner.connect("button-clicked", lambda _b: self.open_config_file())
         self._stack = Adw.ViewStack()
-        header = Adw.HeaderBar(
-            title_widget=Adw.ViewSwitcher(stack=self._stack, policy=Adw.ViewSwitcherPolicy.WIDE)
-        )
-        toolbar = Adw.ToolbarView()
-        toolbar.add_top_bar(header)
-        toolbar.add_top_bar(self._banner)
-        toolbar.set_content(self._stack)
-        self._toasts = Adw.ToastOverlay(child=toolbar)
+        self._split = Adw.NavigationSplitView(min_sidebar_width=200, max_sidebar_width=260)
+        self._sidebar = Adw.ViewSwitcherSidebar(stack=self._stack)
+        self._sidebar.connect("activated", lambda _s: self._split.set_show_content(True))
+        sidebar_view = Adw.ToolbarView(content=self._sidebar)
+        sidebar_view.add_top_bar(Adw.HeaderBar())
+        self._split.set_sidebar(Adw.NavigationPage(title="Launcher Settings", child=sidebar_view))
+        content_view = Adw.ToolbarView(content=self._stack)
+        content_view.add_top_bar(Adw.HeaderBar())
+        content_view.add_top_bar(self._banner)
+        self._content_page = Adw.NavigationPage(title="General", child=content_view)
+        self._split.set_content(self._content_page)
+        self._stack.connect("notify::visible-child", lambda *_a: self._on_page_changed())
+        self._toasts = Adw.ToastOverlay(child=self._split)
         self.set_content(self._toasts)
+        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 720sp"))
+        narrow.add_setter(self._split, "collapsed", True)
+        narrow.add_setter(self._sidebar, "mode", Adw.SidebarMode.PAGE)
+        self.add_breakpoint(narrow)
 
         self._pages = [
             GeneralPage(self),
@@ -129,6 +140,11 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.toast(f"Not saved: {error}")
             self._refresh_pages()  # put the controls back to what the file says
 
+    def _on_page_changed(self) -> None:
+        page = self._stack.get_visible_child()
+        if page is not None:
+            self._content_page.set_title(page.get_title())
+
     def stack_page(self, page: Gtk.Widget) -> Adw.ViewStackPage | None:
         return self._stack.get_page(page)
 
@@ -148,6 +164,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         kind, _, key = item.partition(":")
 
         def show() -> bool:
+            self._split.set_show_content(True)  # a narrow window shows one page at a time
             if kind == "status":
                 self._stack.set_visible_child_name("status")
             elif kind == "app":

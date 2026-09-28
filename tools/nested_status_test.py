@@ -126,6 +126,10 @@ def main() -> int:
     pump(0.3)
     stack = window._stack
     check("--edit status opens the Status page", stack.get_visible_child_name() == "status")
+    check("…titled Status", window._content_page.get_title() == "Status")
+    names = [p.get_name() for p in stack.get_pages()]
+    check("the sidebar lists every page", len(names) == 9 and names[-1] == "status", repr(names))
+    check("…side by side with the page", not window._split.get_collapsed())
     page = stack.get_visible_child()
     check("the page checks when shown", wait(lambda: bool(page.checks), 10))
     row = rows(page).get("Helper extension")
@@ -185,6 +189,17 @@ def main() -> int:
     labels["Clear"].emit("clicked")
     pump(0.2)
     check("Clear removes it", not group.get_visible() and crash.load() is None)
+
+    # A narrow window: the sidebar becomes a list that leads to one page at a time.
+    window.set_default_size(480, 700)
+    check("a narrow window collapses the sidebar", wait(window._split.get_collapsed, 3))
+    window._split.set_show_content(False)
+    window.open_item("status")
+    pump(0.3)
+    check("…and --edit status still shows the page", window._split.get_show_content())
+    window._split.set_show_content(False)
+    window._sidebar.emit("activated")
+    check("choosing a page in the list opens it", window._split.get_show_content())
 
     window.close()
     pump(0.3)
