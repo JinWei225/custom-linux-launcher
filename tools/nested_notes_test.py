@@ -73,6 +73,19 @@ def sidebar_rows(window: NotesWindow) -> list[tuple[str, str]]:
     return rows
 
 
+def open_menu(window: NotesWindow, kind: str, label: str) -> Gtk.PopoverMenu | None:
+    """Right-click the first sidebar row of this kind and label; returns its menu."""
+    i = 0
+    while (row := window.sidebar.list.get_row_at_index(i)) is not None:
+        if (row.kind, row.label) == (kind, label):
+            ok, bounds = row.compute_bounds(window.sidebar.list)
+            window.sidebar._right_click(Gtk.GestureClick(), 1, 40, bounds.get_y() + 5)
+            pump(0.6)
+            return window.sidebar._popover
+        i += 1
+    return None
+
+
 def shot(window: NotesWindow, name: str) -> None:
     if SNAPSHOTS:
         pump(0.3)
@@ -141,6 +154,33 @@ def main() -> int:
     i = rows.index(("folder", "Signals"))
     check("expanding a folder shows its notes", rows[i + 1] == ("note", "Week 1"), repr(rows))
     shot(window, "notes-sidebar")
+
+    # Right-click menus: fully shown (no scrolling), and safe while the sidebar rebuilds.
+    for kind, label in (("note", "Lecture 3"), ("folder", "Signals")):
+        menu = open_menu(window, kind, label)
+        check(f"{kind} menu opens", menu is not None and menu.get_visible())
+        if menu is None:
+            continue
+        viewport = menu.get_child()
+        content = viewport.get_first_child().get_first_child()
+        check(
+            f"{kind} menu shows every item without scrolling",
+            content.get_height() <= viewport.get_height(),
+            f"content {content.get_height()} > viewport {viewport.get_height()}",
+        )
+        window.refresh()  # e.g. an autosave or another app's change while it is open
+        pump(0.3)
+        check(f"{kind} menu stays open through a refresh", menu.get_visible())
+        menu.popdown()
+        pump(0.3)
+        check(f"{kind} menu is detached once closed", menu.get_parent() is None)
+    menu = open_menu(window, "note", "Lecture 3")
+    window.activate_action("win.unpin-note", GLib.Variant("s", "Lecture 3.md"))
+    menu.popdown()  # what choosing an item does
+    ok = wait_for(lambda: ("header", "Pinned") not in sidebar_rows(window), 1.0)
+    check("choosing a menu item updates the sidebar", ok, repr(sidebar_rows(window)))
+    window.activate_action("win.pin-note", GLib.Variant("s", "Lecture 3.md"))
+    pump(0.2)
 
     # Another app changes the open note while it has no unsaved edits: reloaded.
     (NOTES / "Lecture 3.md").write_text("# Lecture 3\n\nedited elsewhere\n")

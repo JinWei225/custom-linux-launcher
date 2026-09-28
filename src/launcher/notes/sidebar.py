@@ -48,6 +48,12 @@ class Sidebar(Gtk.ScrolledWindow):
         click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
         click.connect("pressed", self._right_click)
         self.list.add_controller(click)
+        # The open right-click menu. It hangs off a row, so it must be detached before
+        # that row goes away (rebuild) or the window closes (unrealize): GTK crashes
+        # finalizing a row that still has a menu attached.
+        self._popover: Gtk.PopoverMenu | None = None
+        self._pending: tuple | None = None  # a rebuild held back while the menu is open
+        self.connect("unrealize", lambda *_a: self._drop_popover())
 
     # --- building ------------------------------------------------------------------------
 
@@ -59,6 +65,12 @@ class Sidebar(Gtk.ScrolledWindow):
         expanded: set[str],
         current: str | None,
     ) -> None:
+        if self._popover is not None:
+            # A background refresh (autosave, another app's change) must not pull the
+            # menu out from under the pointer: rebuild once it closes.
+            self._pending = (pinned, recent, tree, expanded, current)
+            return
+        self._pending = None
         self.list.remove_all()
         if pinned:
             self._header("Pinned")
@@ -148,11 +160,40 @@ class Sidebar(Gtk.ScrolledWindow):
         if menu is None:
             return
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self.list.select_row(row)
+        # Attached to the row, not the list: a list box's remove_all() loops forever on
+        # a child that isn't a row.
+        self._drop_popover()
+        ok, bounds = row.compute_bounds(self.list)
         popover = Gtk.PopoverMenu.new_from_model(menu)
         popover.set_has_arrow(False)
-        popover.set_parent(self.list)
+        popover.set_parent(row)
         rect = Gdk.Rectangle()
-        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y - bounds.get_y()) if ok else 0, 1, 1
         popover.set_pointing_to(rect)
-        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
-        popover.popup()
+        # Detach once closed, after the chosen item's action has run.
+        popover.connect("closed", lambda p: GLib.idle_add(self._menu_closed, p))
+        self._popover = popover
+        # Open it on the next turn of the main loop: a menu popped up in the frame it was
+        # created in is sized before its items are measured, and then has to scroll.
+        GLib.idle_add(self._show_popover, popover)
+
+    def _show_popover(self, popover: Gtk.PopoverMenu) -> bool:
+        if popover is self._popover:  # not dropped meanwhile
+            popover.popup()
+        return GLib.SOURCE_REMOVE
+
+    def _menu_closed(self, popover: Gtk.PopoverMenu) -> bool:
+        if popover is self._popover:
+            self._drop_popover()
+            if self._pending is not None:
+                self.rebuild(*self._pending)
+        return GLib.SOURCE_REMOVE
+
+    def _drop_popover(self) -> None:
+        """Close and detach the open menu, if any."""
+        popover, self._popover = self._popover, None
+        if popover is not None:
+            popover.popdown()
+            if popover.get_parent() is not None:
+                popover.unparent()
