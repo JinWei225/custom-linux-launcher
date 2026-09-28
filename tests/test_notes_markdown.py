@@ -285,3 +285,53 @@ def test_attachment_names_and_links():
     assert attachment_name("???", "1", set()) == "image-1.png"
     text = "![](attachments/a.png)\n[doc](attachments/b.pdf) ![](other/c.png) ![](https://x/y.png)"
     assert attachment_links(text) == ["attachments/a.png", "attachments/b.pdf"]
+
+
+# --- outline ---------------------------------------------------------------------------
+
+from launcher.notes_markdown import Heading, outline, plain_text, section_at  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "line, start, expected",
+    [
+        ("plain", 0, "plain"),
+        ("**bold** and *it*", 0, "bold and it"),
+        ("see [the docs](https://a.b) now", 0, "see the docs now"),
+        ("<https://a.b> and https://c.d", 0, "https://a.b and https://c.d"),
+        ("## Week **3**", 3, "Week 3"),
+        ("`**code**` ~~x~~ ==y== <u>z</u>", 0, "**code** x y z"),
+        ("2 * 3 * 4", 0, "2 * 3 * 4"),
+    ],
+)
+def test_plain_text(line, start, expected):
+    assert plain_text(line, start) == expected
+
+
+def test_outline():
+    lines = [
+        "# Lecture 3",
+        "intro",
+        "## Part **one**",
+        "```",
+        "# not a heading",
+        "```",
+        "#",
+        "## ",
+        "### [Linked](x.md) detail",
+        "#hashtag",
+    ]
+    assert outline(lines) == [
+        Heading(0, 1, "Lecture 3"),
+        Heading(2, 2, "Part one"),
+        Heading(8, 3, "Linked detail"),
+    ]
+    assert outline([]) == []
+
+
+def test_section_at():
+    headings = [Heading(2, 1, "a"), Heading(5, 2, "b"), Heading(9, 2, "c")]
+    assert [section_at(headings, n) for n in (0, 1, 2, 4, 5, 8, 9, 50)] == [
+        None, None, 0, 0, 1, 1, 2, 2,
+    ]  # fmt: skip
+    assert section_at([], 3) is None

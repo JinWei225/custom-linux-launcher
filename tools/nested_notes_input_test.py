@@ -85,6 +85,27 @@ class Input:
         rect = self.editor.get_iter_location(it)
         return rect.x + max(rect.width, 2) / 2, rect.y + rect.height / 2
 
+    def click_widget(self, widget: Gtk.Widget, x: float | None = None, y: float | None = None):
+        """Click a widget (its middle, or x, y in its own coordinates), also one in a
+        popover, which is a surface of its own placed relative to the window's."""
+        x = widget.get_width() / 2 if x is None else x
+        y = widget.get_height() / 2 if y is None else y
+        native = widget.get_native()
+        ok, point = widget.compute_point(native, Graphene.Point().init(x, y))
+        sx, sy = point.x, point.y
+        if native is not self.window:
+            nx, ny = native.get_surface_transform()
+            wx, wy = self.window.get_surface_transform()
+            surface = native.get_surface()
+            sx += nx + surface.get_position_x() - wx
+            sy += ny + surface.get_position_y() - wy
+        self._call("Move", GLib.Variant("(dd)", (self.origin[0] + sx, self.origin[1] + sy)))
+        pump(0.05)
+        for state in (True, False):
+            self._call("Button", GLib.Variant("(ub)", (1, state)))
+            pump(0.03)
+        pump(0.3)
+
     def move(self, bx: float, by: float) -> None:
         self._call("Move", GLib.Variant("(dd)", self.screen(bx, by)))
         pump(0.05)
@@ -210,6 +231,57 @@ def main() -> int:
         t.get_property("name")
         for t in buffer.get_iter_at_line_offset(last, line(last).index("bold") + 1)[1].get_tags()
     }, repr(line(last)))  # fmt: skip
+
+    # The outline: Ctrl+Shift+O lists the headings, the cursor's section selected; arrow
+    # keys and Enter, or a click, jump to one and scroll it to the top.
+    body = "\n".join(f"line {i}" for i in range(50))
+    window.new_note(text=f"# Course\n{body}\n## Week **1**\n{body}\n## Week 2\n"
+                         f"```\n# not a heading\n```\n### Detail\n{body}\n")  # fmt: skip
+    pump(0.5)
+    week1 = 51
+    week2 = 102
+    buffer.place_cursor(buffer.get_iter_at_line(week1 + 5)[1])
+    pump(0.2)
+    io.key(Gdk.KEY_Control_L, True)
+    io.key(Gdk.KEY_Shift_L, True)
+    io.key(Gdk.KEY_o)
+    io.key(Gdk.KEY_Shift_L, False)
+    io.key(Gdk.KEY_Control_L, False)
+    pump(0.4)
+    outline = window._outline
+    rows = []
+    while (row := outline.list.get_row_at_index(len(rows))) is not None:
+        rows.append(row)
+    labels = [r.get_child().get_label() for r in rows]
+    check("Ctrl+Shift+O opens the outline", outline.get_visible())
+    check("the outline lists the headings", labels == ["Course", "Week 1", "Week 2", "Detail"],
+          repr(labels))  # fmt: skip
+    selected = outline.list.get_selected_row()
+    check("the cursor's section is selected", selected is rows[1] if rows else False)
+    scroller = outline.get_child()
+    check(
+        "the outline fits without scrolling",
+        scroller.get_vadjustment().get_upper() <= scroller.get_vadjustment().get_page_size() + 1,
+    )
+    io.key(Gdk.KEY_Down)
+    io.key(Gdk.KEY_Return)
+    pump(0.6)
+    check("Enter on a heading jumps to it", cursor() == (week2, 3), repr(cursor()))
+    check("…and closes the outline", not outline.get_visible())
+    top = editor.get_visible_rect().y
+    y = editor.get_iter_location(buffer.get_iter_at_line(week2)[1]).y
+    check("…scrolled to the top", abs(y - top) < 30, f"heading at {y}, top {top}")
+    io.type("Z")
+    check("typing goes on in the editor", line(week2) == "## ZWeek 2", repr(line(week2)))
+    io.click_widget(window._outline_button)
+    pump(0.3)
+    check("the header button opens it", outline.get_visible())
+    if outline.get_visible():
+        io.click_widget(outline.list.get_row_at_index(0))
+        pump(0.6)
+        check("clicking a heading jumps to it", cursor() == (0, 2), repr(cursor()))
+        top = editor.get_visible_rect().y
+        check("…scrolled back to the top", top < 30, repr(top))
 
     window.save_now()
     saved = (NOTES / window.session.rel).read_text()

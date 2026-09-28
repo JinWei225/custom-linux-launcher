@@ -281,6 +281,21 @@ class MarkdownEditor(Gtk.TextView):
             end.forward_to_line_end()
         return self.buffer.get_text(start, end, True)
 
+    def headings(self) -> list[md.Heading]:
+        return md.outline(self._lines, self._infos)
+
+    def cursor_line(self) -> int:
+        return self._cursor().get_line()
+
+    def go_to_line(self, line: int) -> None:
+        """Put the cursor at the start of a line's text and scroll that line to the top."""
+        if not 0 <= line < len(self._infos):
+            return
+        column = min(self._infos[line].content, len(self._lines[line]))
+        self.buffer.place_cursor(self.buffer.get_iter_at_line_offset(line, column)[1])
+        self.scroll_to_mark(self.buffer.get_insert(), 0.0, True, 0.0, 0.0)
+        self.grab_focus()
+
     def _line_start(self, line: int) -> Gtk.TextIter:
         return self.buffer.get_iter_at_line(line)[1]
 

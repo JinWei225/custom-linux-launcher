@@ -23,8 +23,10 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
 from .. import paths  # noqa: E402
 from ..config import Config, ConfigError, load_config  # noqa: E402
+from ..notes_markdown import Heading, section_at  # noqa: E402
 from ..notes_store import NotesError, NoteSession, NotesStore, flatten  # noqa: E402
 from .editor import MarkdownEditor  # noqa: E402
+from .outline import Outline  # noqa: E402
 from .sidebar import Sidebar, SidebarRow  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -137,6 +139,14 @@ class NotesWindow(Adw.ApplicationWindow):
         header.pack_start(toggle)
         self._menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic", tooltip_text="Menu")
         header.pack_end(self._menu_button)
+        self._outline = Outline(self._outline_headings, self._go_to_heading)
+        self._outline_button = Gtk.MenuButton(
+            icon_name="view-list-symbolic",
+            tooltip_text="Outline (Ctrl+Shift+O)",
+            popover=self._outline,
+            sensitive=False,
+        )
+        header.pack_end(self._outline_button)
 
         self._banner = Adw.Banner(button_label="Reload")
         self._banner.connect("button-clicked", lambda _b: self._reload_from_disk())
@@ -188,6 +198,7 @@ class NotesWindow(Adw.ApplicationWindow):
             ("rename-folder", "s", lambda p: self._ask_rename_folder(p.get_string())),
             ("delete-folder", "s", lambda p: self._confirm_delete_folder(p.get_string())),
             ("open-folder", None, lambda _p: self._open_notes_folder()),
+            ("outline", None, lambda _p: self.show_outline()),
         ]
         for name, ptype, handler in actions:
             action = Gio.SimpleAction.new(name, GLib.VariantType.new(ptype) if ptype else None)
@@ -195,6 +206,7 @@ class NotesWindow(Adw.ApplicationWindow):
             self.add_action(action)
         app.set_accels_for_action("win.new-note", ["<Control>n"])
         app.set_accels_for_action("win.toggle-sidebar", ["F9"])
+        app.set_accels_for_action("win.outline", ["<Control><Shift>o"])
         app.set_accels_for_action("window.close", ["<Control>w"])
 
     # --- menus ---------------------------------------------------------------------------
@@ -268,6 +280,20 @@ class NotesWindow(Adw.ApplicationWindow):
 
     def _toggle_sidebar(self) -> None:
         self.split.set_show_sidebar(not self.split.get_show_sidebar())
+
+    # --- outline -------------------------------------------------------------------------
+
+    def show_outline(self) -> None:
+        if self.session is not None:
+            self._outline_button.popup()
+
+    def _outline_headings(self) -> tuple[list[Heading], int | None]:
+        headings = self.editor.headings()
+        return headings, section_at(headings, self.editor.cursor_line())
+
+    def _go_to_heading(self, line: int) -> None:
+        if self.session is not None:
+            self.editor.go_to_line(line)
 
     # --- opening and saving --------------------------------------------------------------
 
@@ -372,6 +398,7 @@ class NotesWindow(Adw.ApplicationWindow):
     def _update_title(self) -> None:
         """Header title, and where the editor finds (and saves) this note's pictures.
         Called whenever the open note is opened, renamed or moved."""
+        self._outline_button.set_sensitive(self.session is not None)
         if self.session is None:
             self._title.set_title("Notes")
             self._title.set_subtitle("")

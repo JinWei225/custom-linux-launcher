@@ -361,3 +361,43 @@ def attachment_links(text: str) -> list[str]:
         if url.startswith("attachments/") and "/" not in url[len("attachments/") :]:
             found.append(url)
     return found
+
+
+def plain_text(line: str, start: int = 0) -> str:
+    """A line from column `start` as it reads, without inline markers ("**a** [b](u)" ->
+    "a b")."""
+    hidden: set[int] = set()
+    for sp in inline_spans(line, start):
+        hidden.update(range(sp.start, sp.inner_start))
+        hidden.update(range(sp.inner_end, sp.end))
+    return "".join(ch for i, ch in enumerate(line) if i >= start and i not in hidden)
+
+
+# --- outline ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Heading:
+    line: int
+    level: int
+    text: str
+
+
+def outline(lines: list[str], infos: list[LineInfo] | None = None) -> list[Heading]:
+    """The note's headings, in order (not ones inside code blocks, nor a bare "# ")."""
+    infos = infos if infos is not None else classify(lines)
+    headings = []
+    for n, (line, info) in enumerate(zip(lines, infos, strict=True)):
+        if info.kind == "heading" and (text := plain_text(line, info.content).strip()):
+            headings.append(Heading(n, info.level, text))
+    return headings
+
+
+def section_at(headings: list[Heading], line: int) -> int | None:
+    """Index of the heading whose section holds `line` (the last one at or above it)."""
+    found = None
+    for i, heading in enumerate(headings):
+        if heading.line > line:
+            break
+        found = i
+    return found
