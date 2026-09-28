@@ -9,7 +9,7 @@ APPS_DIR    := $(HOME)/.local/share/applications
 UNIT_DIR    := $(HOME)/.config/systemd/user
 
 .PHONY: venv dev test lint format install uninstall logs install-espanso-fix uninstall-espanso-fix \
-	install-extension test-extension
+	install-extension test-extension screenshots
 
 venv: $(VENV)/.done
 $(VENV)/.done: pyproject.toml
@@ -90,3 +90,7 @@ install-extension:
 # Test the extension in a private headless GNOME Shell (no logout needed).
 test-extension: venv
 	tools/nested-shell.sh
+
+# The README's screenshots, with made-up data, in a private headless GNOME Shell.
+screenshots: venv
+	tools/nested-shell.sh $(VENV)/bin/python tools/nested_screenshots.py docs/screenshots

@@ -300,10 +300,9 @@ def check(config: Config, command: str | None = None) -> tuple[list[str], list[s
             continue
         path = f"{CUSTOM_BASE}{binding.key}/"
         custom = Gio.Settings.new_with_path(CUSTOM_SCHEMA, path)
-        if path not in registered or (
-            custom.get_string("binding"),
-            custom.get_string("command"),
-        ) != (binding.accel, binding.command):
+        # The keys, not the command: that differs between an installed launcher and one
+        # run from a checkout, and the daemon rewrites it on its next sync anyway.
+        if path not in registered or not accel.same(custom.get_string("binding"), binding.accel):
             missing.append(f"{binding.name} ({accel.label(binding.accel)})")
     return missing, clashes
 
