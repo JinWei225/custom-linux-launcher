@@ -62,6 +62,19 @@ def normalize(accel: str) -> str | None:
     return "".join(f"<{m}>" for m in _ORDER if m in mods) + key
 
 
+_LABELS = {"Control": "Ctrl", "space": "Space", "Return": "Enter", "KP_Enter": "Enter"}
+
+
+def label(accel: str) -> str:
+    """ "<Super><Shift>Return" -> "Super+Shift+Enter", as GNOME shows shortcuts."""
+    parsed = parse(accel)
+    if parsed is None:
+        return accel
+    mods, key = parsed
+    key = key.upper() if len(key) == 1 else _LABELS.get(key, key[0].upper() + key[1:])
+    return "+".join([_LABELS.get(m, m) for m in _ORDER if m in mods] + [key])
+
+
 def same(a: str, b: str) -> bool:
     na, nb = normalize(a), normalize(b)
     return na is not None and nb is not None and na.casefold() == nb.casefold()

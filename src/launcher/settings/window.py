@@ -40,6 +40,7 @@ from .dialogs import (  # noqa: E402
     app_icon,
     switch_row,
 )
+from .status import StatusPage  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ClipboardPage(self),
             FilesPage(self),
             ConvertersPage(self),
+            StatusPage(self),
         ]
         for page in self._pages:
             self._stack.add_titled_with_icon(page, page.key, page.get_title(), page.get_icon_name())
@@ -127,6 +129,9 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.toast(f"Not saved: {error}")
             self._refresh_pages()  # put the controls back to what the file says
 
+    def stack_page(self, page: Gtk.Widget) -> Adw.ViewStackPage | None:
+        return self._stack.get_page(page)
+
     def toast(self, message: str) -> None:
         self._toasts.add_toast(Adw.Toast(title=message, timeout=6))
 
@@ -138,11 +143,14 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.toast(f"Could not open the config file: {e}")
 
     def open_item(self, item: str) -> None:
-        """Jump to an app, quicklink or snippet (from Ctrl+E in the launcher)."""
+        """Jump to an app, quicklink or snippet (from Ctrl+E in the launcher), or to a
+        page ("status", from the crash notice)."""
         kind, _, key = item.partition(":")
 
         def show() -> bool:
-            if kind == "app":
+            if kind == "status":
+                self._stack.set_visible_child_name("status")
+            elif kind == "app":
                 self._stack.set_visible_child_name("apps")
                 AppDialog(self, key).present()
             elif kind == "quicklink":

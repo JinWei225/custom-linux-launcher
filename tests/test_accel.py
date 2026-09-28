@@ -36,3 +36,19 @@ def test_hotkey_problem():
     assert accel.hotkey_problem("F9") is None
     assert "needs Super" in accel.hotkey_problem("<Shift>a")
     assert "not a shortcut" in accel.hotkey_problem("Super+F")
+
+
+@pytest.mark.parametrize(
+    "accel_text, shown",
+    [
+        ("<Super><Shift>Return", "Shift+Super+Enter"),  # always Ctrl, Alt, Shift, Super
+        ("<Control>space", "Ctrl+Space"),
+        ("<shift><super>f", "Shift+Super+F"),
+        ("<Primary><Alt>F5", "Ctrl+Alt+F5"),
+        ("not an accel <", "not an accel <"),
+    ],
+)
+def test_label(accel_text, shown):
+    from launcher.accel import label
+
+    assert label(accel_text) == shown

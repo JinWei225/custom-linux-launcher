@@ -11,6 +11,7 @@ launcher --run app:ID       launch an app / quicklink / snippet (what hotkeys ru
 launcher --settings [--edit app:ID|quicklink:NAME|snippet:NAME]   open Launcher Settings
 launcher --clipboard-pause  pause / resume clipboard recording
 launcher --notes [--open NOTE | --new TITLE]   open Notes (a note, or a new one)
+launcher --doctor           check the setup and print what to fix
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--import-espanso",
         action="store_true",
         help="move espanso's base.yml matches into snippets.toml (keeps base.yml.bak)",
+    )
+    group.add_argument(
+        "--doctor", action="store_true", help="check the setup and print what to fix"
     )
     parser.add_argument("--debug", action="store_true", help="verbose logging")
     return parser.parse_args(argv)
@@ -97,6 +101,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"moved {snippet.trigger}  ->  {snippet.name}")
         print(f"{len(moved)} snippet(s) moved to {paths.config_dir() / 'snippets.toml'}")
         return 0
+
+    if args.doctor:
+        from .doctor import ERROR, evaluate, gather, report
+
+        checks = evaluate(gather())
+        print(report(checks, color=sys.stdout.isatty()))
+        return 1 if any(c.status == ERROR for c in checks) else 0
 
     if args.notes:
         from .notes.app import run_notes

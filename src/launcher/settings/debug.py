@@ -48,6 +48,7 @@ def render_all(window, directory: str) -> None:
         "clipboard",
         "files",
         "converters",
+        "status",
     ):
         steps.append((lambda n=name: window._stack.set_visible_child_name(n), f"page-{name}"))
     first_link = window.config.quicklinks[0].name if window.config.quicklinks else None

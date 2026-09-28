@@ -286,6 +286,28 @@ def sync(config: Config, command: str | None = None) -> list[str]:
     return problems
 
 
+def check(config: Config, command: str | None = None) -> tuple[list[str], list[str]]:
+    """Without changing anything: the config's shortcuts GNOME doesn't have (as
+    "Name (keys)"), and the ones whose keys something else already uses."""
+    command = command or launcher_command()
+    registered = set(Gio.Settings.new(MEDIA_KEYS).get_strv("custom-keybindings"))
+    taken = system_bindings(include_owned=False)
+    missing, clashes = [], []
+    for binding in desired_bindings(config, command):
+        owner = taken.get(accel.normalize(binding.accel).casefold())
+        if owner is not None:
+            clashes.append(f"{binding.name}: {accel.label(binding.accel)} is used by {owner}")
+            continue
+        path = f"{CUSTOM_BASE}{binding.key}/"
+        custom = Gio.Settings.new_with_path(CUSTOM_SCHEMA, path)
+        if path not in registered or (
+            custom.get_string("binding"),
+            custom.get_string("command"),
+        ) != (binding.accel, binding.command):
+            missing.append(f"{binding.name} ({accel.label(binding.accel)})")
+    return missing, clashes
+
+
 def _reset(custom: Gio.Settings) -> None:
     for key in ("name", "command", "binding"):
         custom.reset(key)
