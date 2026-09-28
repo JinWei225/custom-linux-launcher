@@ -44,6 +44,17 @@ FAINT = (0.0, 0.0, 0.0, 0.06)  # code background
 LINE = (0.75, 0.75, 0.77)  # rules, quote bars, empty checkboxes
 HIGHLIGHT = (1.0, 0.91, 0.45)
 WEB = ("http://", "https://", "mailto:")
+MISSING_SUPPORT = "PDF export needs the python3-gi-cairo package: sudo apt install python3-gi-cairo"
+
+
+def missing_support() -> str | None:
+    """Why PDF export can't work here, or None. PyGObject hands cairo drawing contexts
+    to Pango through a separate system package, which `apt autoremove` can remove."""
+    try:
+        gi.require_foreign("cairo")
+    except ImportError:
+        return MISSING_SUPPORT
+    return None
 
 
 def export_pdf(

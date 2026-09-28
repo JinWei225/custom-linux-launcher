@@ -34,6 +34,9 @@ format: venv
 	$(VENV)/bin/ruff format src tests
 
 install:
+	@$(PYTHON) -c "import gi; gi.require_foreign('cairo')" 2>/dev/null || \
+		echo "warning: python3-gi-cairo is missing, so Notes can't export PDFs" \
+		"(sudo apt install python3-gi-cairo)"
 	uv venv --quiet --allow-existing --python $(PYTHON) --system-site-packages $(INSTALL_VENV)
 	uv pip install --quiet --python $(INSTALL_VENV)/bin/python --reinstall .
 	install -d $(BIN_DIR)

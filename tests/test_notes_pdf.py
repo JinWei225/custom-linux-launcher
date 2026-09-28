@@ -6,7 +6,10 @@ import zlib
 import pytest
 
 gi = pytest.importorskip("gi")
-from launcher.notes.pdf import export_pdf  # noqa: E402
+from launcher.notes.pdf import MISSING_SUPPORT, export_pdf, missing_support  # noqa: E402
+
+if missing_support():  # fail loudly: skipping would hide that exporting is broken
+    pytest.fail(missing_support(), pytrace=False)
 
 needs_poppler = pytest.mark.skipif(
     not (shutil.which("pdftotext") and shutil.which("pdfinfo")), reason="needs poppler-utils"
@@ -145,3 +148,12 @@ def test_failed_export_keeps_the_old_file(tmp_path, monkeypatch):
         export_pdf("x", out, title="x")
     assert out.read_bytes() == b"old"
     assert [p.name for p in tmp_path.iterdir()] == ["keep.pdf"]  # no leftovers
+
+
+def test_missing_cairo_support_is_explained(monkeypatch):
+    def no_cairo(name):
+        raise ImportError("No module named 'gi._gi_cairo'")
+
+    monkeypatch.setattr("gi.require_foreign", no_cairo)
+    assert missing_support() == MISSING_SUPPORT
+    assert "sudo apt install python3-gi-cairo" in MISSING_SUPPORT

@@ -26,9 +26,9 @@ from .. import paths  # noqa: E402
 from ..config import Config, ConfigError, load_config  # noqa: E402
 from ..notes_markdown import Heading, section_at  # noqa: E402
 from ..notes_store import NotesError, NoteSession, NotesStore, flatten  # noqa: E402
+from . import pdf  # noqa: E402
 from .editor import MarkdownEditor  # noqa: E402
 from .outline import Outline  # noqa: E402
-from .pdf import export_pdf  # noqa: E402
 from .sidebar import Sidebar, SidebarRow  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -546,6 +546,10 @@ class NotesWindow(Adw.ApplicationWindow):
     def ask_export_pdf(self) -> None:
         if self.session is None:
             return
+        if problem := pdf.missing_support():
+            log.error("PDF export: %s", problem)
+            self.toast(problem)
+            return
         self.save_now()
         dialog = Gtk.FileDialog(
             title="Export to PDF", initial_name=f"{Path(self.session.rel).stem}.pdf"
@@ -579,7 +583,7 @@ class NotesWindow(Adw.ApplicationWindow):
             Gtk.Settings.get_default().get_property("gtk-font-name") or "Sans"
         ).get_family()
         try:
-            pages = export_pdf(
+            pages = pdf.export_pdf(
                 self._text(),
                 path,
                 title=self.session.title,
@@ -589,6 +593,10 @@ class NotesWindow(Adw.ApplicationWindow):
         except (OSError, cairo.Error, GLib.Error) as e:
             log.error("exporting %s to %s failed: %s", self.session.rel, path, e)
             self.toast(f"Could not export: {e}")
+            return False
+        except Exception as e:  # a bug must still say that nothing was exported
+            log.exception("exporting %s to %s failed", self.session.rel, path)
+            self.toast(f"Could not export: {pdf.missing_support() or e}")
             return False
         log.debug("exported %s to %s (%d pages)", self.session.rel, path, pages)
         self._state["export_folder"] = str(path.parent)

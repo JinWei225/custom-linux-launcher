@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from launcher import paths  # noqa: E402
+from launcher.notes import pdf as notes_pdf  # noqa: E402
 from launcher.notes.window import NotesWindow  # noqa: E402
 
 NOTES = Path(os.environ["XDG_DATA_HOME"]) / "Notes"
@@ -329,6 +330,13 @@ def main() -> int:
     failed = window.export_pdf(exports / "missing" / "x.pdf")
     message = toasts[-1].get_title()
     check("a failed export is reported", not failed and "Could not export" in message, message)
+    real_missing = notes_pdf.missing_support
+    notes_pdf.missing_support = lambda: notes_pdf.MISSING_SUPPORT
+    window.ask_export_pdf()
+    pump(0.5)
+    notes_pdf.missing_support = real_missing
+    message = toasts[-1].get_title()
+    check("without python3-gi-cairo, it says what to install", "apt install" in message, message)
     window._toasts.add_toast = real_add
 
     window.save_now()
