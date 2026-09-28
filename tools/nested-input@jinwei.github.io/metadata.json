@@ -1,0 +1,6 @@
+{
+  "uuid": "nested-input@jinwei.github.io",
+  "name": "Nested Input (tests only)",
+  "description": "Real pointer and keyboard input for the launcher's nested-shell tests. Never install it in a real session.",
+  "shell-version": ["50"]
+}

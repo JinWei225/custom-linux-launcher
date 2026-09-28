@@ -9,6 +9,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 UUID=launcher-helper@jinwei.github.io
+INPUT_UUID=nested-input@jinwei.github.io  # test-only virtual pointer/keyboard
 TMP=$(mktemp -d /tmp/launcher-nested.XXXXXX)
 DISPLAY_NAME=launcher-nested-$$
 trap 'rm -rf "$TMP"' EXIT
@@ -17,15 +18,18 @@ export XDG_CONFIG_HOME=$TMP/config XDG_DATA_HOME=$TMP/data XDG_CACHE_HOME=$TMP/c
     XDG_STATE_HOME=$TMP/state
 mkdir -p "$XDG_DATA_HOME/gnome-shell/extensions" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 cp -r "$ROOT/extension/$UUID" "$XDG_DATA_HOME/gnome-shell/extensions/"
+cp -r "$ROOT/tools/$INPUT_UUID" "$XDG_DATA_HOME/gnome-shell/extensions/"
 
 if [ $# -eq 0 ]; then
     set -- "$ROOT/.venv/bin/python" "$ROOT/tools/nested_extension_test.py"
 fi
 
-export NESTED_DISPLAY=$DISPLAY_NAME NESTED_UUID=$UUID NESTED_TMP=$TMP
+export NESTED_DISPLAY=$DISPLAY_NAME NESTED_UUID=$UUID NESTED_INPUT_UUID=$INPUT_UUID \
+    NESTED_TMP=$TMP
 exec dbus-run-session -- bash -c '
     set -e
-    gsettings set org.gnome.shell enabled-extensions "[\"$NESTED_UUID\"]"
+    gsettings set org.gnome.shell enabled-extensions \
+        "[\"$NESTED_UUID\", \"$NESTED_INPUT_UUID\"]"
     gsettings set org.gnome.shell welcome-dialog-last-shown-version "999"
     unset DISPLAY
     gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x800 \

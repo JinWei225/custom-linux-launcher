@@ -129,6 +129,7 @@ class MarkdownEditor(Gtk.TextView):
         self.buffer.connect("end-user-action", self._on_user_action_done)
         self._touched: tuple[int, int] | None = None  # lines changed in this user action
         self.buffer.connect("notify::cursor-position", self._on_cursor_moved)
+        self._cursor_idle = 0
         for signal in ("undo", "redo"):
             self.buffer.connect(signal, self._set_undoing, True)
             self.buffer.connect_after(signal, self._set_undoing, False)
@@ -171,7 +172,17 @@ class MarkdownEditor(Gtk.TextView):
             )
             for level, scale in HEADING_SCALES.items()
         }
-        self.t_hidden = tag("md-hidden", invisible=True)
+        # Hidden markup is shrunk to nothing and made transparent, not made "invisible":
+        # GtkTextView's invisible text breaks its mapping between screen positions and
+        # characters (clicks, hovering, an input method's preedit) and aborts the app with
+        # "byte index off the end of the line". Tiny text stays in the layout, so every
+        # position maps to a real character. Tabs get a 1 px stop, as a tab's width
+        # doesn't follow its font size.
+        tiny_tabs = Pango.TabArray.new(1, True)
+        tiny_tabs.set_tab(0, Pango.TabAlign.LEFT, 1)
+        self.t_hidden = tag(
+            "md-hidden", size=1, foreground_rgba=_rgba("rgba(0,0,0,0)"), tabs=tiny_tabs
+        )
         self.t_markup = tag("md-markup")  # dimmed markup; colour set in _update_colors
         self.t_list = [tag(f"md-list{d}") for d in range(md.MAX_DEPTH + 1)]
         self.t_quote = [tag(f"md-quote{d}", style=Pango.Style.ITALIC) for d in range(1, 7)]
@@ -400,10 +411,18 @@ class MarkdownEditor(Gtk.TextView):
                     span(marker, sp.inner_end, sp.end)
 
     def _on_cursor_moved(self, *_args) -> None:
-        if self.buffer.get_line_count() != len(self._infos):
-            return  # mid-edit: the "changed" handler restyles and syncs
-        self._sync_cursor_markup()
-        self._keep_cursor_out_of_markers(self._cursor())
+        # Show the new line's markup a moment later, not while GTK is still handling the
+        # click (or key) that moved the cursor: re-laying out the line under the pointer
+        # mid-click would move the cursor off the character that was clicked.
+        if not self._cursor_idle:
+            self._cursor_idle = GLib.idle_add(self._after_cursor_moved)
+
+    def _after_cursor_moved(self) -> bool:
+        self._cursor_idle = 0
+        if self.buffer.get_line_count() == len(self._infos):  # else a restyle is due
+            self._sync_cursor_markup()
+            self._keep_cursor_out_of_markers(self._cursor())
+        return GLib.SOURCE_REMOVE
 
     def _sync_cursor_markup(self) -> None:
         """Show markup (headings, rules, inline styles, image links) on the cursor's
@@ -534,6 +553,8 @@ class MarkdownEditor(Gtk.TextView):
             return True  # never move focus out of the editor
         if keyval == Gdk.KEY_BackSpace and not mods:
             return self._backspace()
+        if keyval in (Gdk.KEY_Left, Gdk.KEY_KP_Left) and not mods:
+            return self._left_over_marker()
         return False
 
     def _current(self) -> tuple[int, int, str, md.LineInfo] | None:
@@ -598,6 +619,22 @@ class MarkdownEditor(Gtk.TextView):
                     self._set_line(n, new, None if col is None else col + len(new) - len(old))
 
         self._user_edit(edit)
+        return True
+
+    def _left_over_marker(self) -> bool:
+        """Left at the start of an item's text goes to the previous line, not into the
+        hidden marker."""
+        if self.buffer.get_has_selection() or (here := self._current()) is None:
+            return False
+        line, col, _text, info = here
+        start = info.hidden if info.kind == "ordered" else info.content
+        if not info.hidden or col != start:
+            return False
+        it = self._line_start(line)
+        if line > 0:
+            it.backward_char()  # the end of the previous line
+        self.buffer.place_cursor(it)
+        self.scroll_mark_onscreen(self.buffer.get_insert())
         return True
 
     def _backspace(self) -> bool:
