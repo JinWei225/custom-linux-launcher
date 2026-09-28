@@ -10,7 +10,7 @@ Kinds and which leading characters are markup:
   bullet   "\\t- item"     hidden "\\t- " (a bullet is drawn instead)
   task     "- [ ] item"    hidden "- [ ] " (a checkbox is drawn instead)
   ordered  "\\t1. item"    hidden "\\t"; "1. " stays visible, styled
-  quote    "> text"        hidden "> " (a bar is drawn instead)
+  quote    "> text"        hidden "> " (a bar is drawn instead); needs the space
   rule     "---"           the whole line (a line is drawn instead)
   fence    "```python"     shown dim; lines between two fences are "code"
 """
@@ -70,6 +70,10 @@ def classify(lines: list[str]) -> list[LineInfo]:
                 infos.append(LineInfo("code"))
             continue
         info = _classify_line(line)
+        if info.kind == "text" and line.strip() == ">" and infos and infos[-1].kind == "quote":
+            # A bare ">" continues a quote (files often have them between paragraphs),
+            # but on its own it waits for the space: typing ">" alone changes nothing.
+            info = LineInfo("quote", depth=1, hidden=len(line), content=len(line))
         if info.kind == "fence":
             fence = _FENCE.match(line).group(1)
         if info.kind in LIST_KINDS:
@@ -116,7 +120,7 @@ def _classify_line(line: str) -> LineInfo:
         )  # fmt: skip
     if m := _QUOTE.match(line):
         prefix = m.group(1)
-        if prefix.endswith((" ", "\t")) or line.rstrip() == prefix.rstrip():
+        if prefix.endswith((" ", "\t")):  # ">" becomes a quote once the space is typed
             return LineInfo("quote", depth=prefix.count(">"), hidden=m.end(), content=m.end())
     return LineInfo("text")
 

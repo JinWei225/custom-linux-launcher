@@ -20,7 +20,8 @@ import gi
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
+gi.require_version("Graphene", "1.0")
+from gi.repository import Adw, Gdk, GLib, Graphene, Gtk, Pango  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -226,6 +227,51 @@ def main() -> int:
     t.go(0, 6)
     t.key(Gdk.KEY_BackSpace)
     check("Backspace at a checkbox's text removes it", t.text().startswith("buy milk"))
+
+    # Bullets and checkboxes stay put when you start typing after them, and sit on the
+    # same line as their text.
+    def drawn(text: str) -> tuple[float | None, Graphene.Rect | None]:
+        window.editor.load_text(text)
+        window.editor.queue_draw()
+        pump(0.3)
+        return window.editor._bullets.get(0), window.editor._checkboxes.get(0)
+
+    empty_bullet, _ = drawn("- ")
+    full_bullet, _ = drawn("- word")
+    check("bullet doesn't move when typing after it", empty_bullet == full_bullet,
+          f"{empty_bullet} vs {full_bullet}")  # fmt: skip
+    layout = window.editor.create_pango_layout("Ag")
+    text_baseline = layout.get_baseline() / Pango.SCALE  # first row starts at y = 0
+    check("bullet sits on the text's baseline", abs(full_bullet - text_baseline) < 0.5,
+          f"{full_bullet} vs {text_baseline}")  # fmt: skip
+    _, empty_box = drawn("- [ ] ")
+    _, full_box = drawn("- [ ] Word")
+    check(
+        "checkbox doesn't move when typing after it",
+        empty_box.get_y() == full_box.get_y(),
+        f"{empty_box.get_y()} vs {full_box.get_y()}",
+    )
+    cap = window.editor._cap_height()
+    middle = full_box.get_y() + full_box.get_height() / 2
+    check("checkbox is centred on its text", abs(middle - (text_baseline - cap / 2)) <= 1,
+          f"box middle {middle}, text middle {text_baseline - cap / 2}")  # fmt: skip
+    cjk_bullet, _ = drawn("- 中文笔记")
+    cjk_layout = window.editor.create_pango_layout("Ag中文笔记")
+    check("bullet follows a taller CJK row's baseline",
+          abs(cjk_bullet - cjk_layout.get_baseline() / Pango.SCALE) < 0.5)  # fmt: skip
+    if SNAPSHOTS:
+        window.editor.load_text(
+            "- \n- word\n- [ ] \n- [ ] Word here\n- [x] Done item\n- 中文笔记\n"
+        )
+        pump(0.4)
+        snapshot(window, str(SNAPSHOTS / "notes-alignment.png"))
+
+    # Quotes need the space after ">".
+    t.clear()
+    t.type(">")
+    check("'>' alone is not a quote yet", ">" in t.text() and "md-hidden" not in t.tags(0, 0))
+    t.type(" ")
+    check("'> ' makes a quote", "md-hidden" in t.tags(0, 0) and "md-quote1" in t.tags(0, 0))
 
     # Quotes, rules, code blocks.
     t.clear()

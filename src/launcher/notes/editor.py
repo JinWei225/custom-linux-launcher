@@ -77,6 +77,7 @@ class MarkdownEditor(Gtk.TextView):
         self._undoing = False  # undo/redo: don't re-apply renumbering on top
         self._preedit = False
         self._checkboxes: dict[int, Graphene.Rect] = {}  # line -> drawn box (buffer coords)
+        self._bullets: dict[int, float] = {}  # line -> baseline the bullet was drawn on
         self._create_tags()
         # Start of the line whose heading/rule markup is shown (the cursor's line). A mark
         # rather than a number, so it stays on that line when lines are added above it.
@@ -560,6 +561,7 @@ class MarkdownEditor(Gtk.TextView):
         accent = Adw.StyleManager.get_default().get_accent_color_rgba()
         width = self.get_width()
         self._checkboxes = {}
+        self._bullets = {}
 
         self._draw_code_blocks(snapshot, top, bottom, width, faint)
         it, _ = self.get_line_at_y(top)
@@ -569,33 +571,53 @@ class MarkdownEditor(Gtk.TextView):
             if y > bottom or line >= len(self._infos):
                 break
             info = self._infos[line]
-            first = self._first_row(it, info)
             if info.kind == "bullet":
                 glyph = BULLETS[info.depth % len(BULLETS)]
-                self._glyph(snapshot, glyph, self._slot_x(info.depth), first, fg)
+                baseline = y + self._baseline(line, info)
+                self._bullets[line] = baseline
+                self._glyph_on_baseline(snapshot, glyph, self._slot_x(info.depth), baseline, fg)
             elif info.kind == "task":
-                self._checkbox(snapshot, line, info, first, dim, accent)
+                self._checkbox(snapshot, line, info, y, dim, accent)
             elif info.kind == "quote":
                 for d in range(info.depth):
                     x = self._margin + d * QUOTE_STEP + 2
                     snapshot.append_color(accent if d == 0 else dim, _rect(x, y, 3, height))
             elif info.kind == "rule" and line != self._cursor_line:
-                mid = first[0] + first[1] / 2
+                mid = y + (height - self.get_pixels_below_lines()) / 2
                 snapshot.append_color(dim, _rect(self._margin, mid, width - 2 * self._margin, 1))
             if not it.forward_line():
                 break
 
-    def _first_row(self, it: Gtk.TextIter, info: md.LineInfo) -> tuple[int, int]:
-        """(y, height) of a line's first display row (it may wrap onto more)."""
-        content = it.copy()
-        content.set_line_offset(min(info.content, content.get_chars_in_line()))
-        y, height = self.get_line_yrange(it)
-        location = self.get_iter_location(content)
-        return location.y, location.height or height
+    def _baseline(self, line: int, info: md.LineInfo) -> float:
+        """Distance from a line's top to the baseline of its first row of text.
+
+        Measured on a layout of the line's own first characters, so a row that is
+        taller because of CJK text gets its real baseline. (The text view's own
+        character locations can't be used: right after hidden markup, and on an empty
+        item, they report a height of 0.)"""
+        text = self._lines[line][info.content : info.content + 40]
+        layout = self.create_pango_layout("Ag" + text)
+        return layout.get_baseline() / Pango.SCALE
+
+    def _cap_height(self) -> float:
+        """Height of a capital letter above the baseline, in the editor's font."""
+        layout = self.create_pango_layout("H")
+        ink, _logical = layout.get_pixel_extents()
+        return layout.get_baseline() / Pango.SCALE - ink.y
 
     def _slot_x(self, depth: int) -> float:
         """Centre of the space before a list item's text."""
         return self._margin + depth * LIST_STEP + LIST_STEP * 0.5
+
+    def _glyph_on_baseline(self, snapshot, text: str, cx: float, baseline: float, color) -> None:
+        """Draw text centred on cx, sitting on the given baseline like typed text."""
+        layout = self.create_pango_layout(text)
+        _ink, logical = layout.get_pixel_extents()
+        top = baseline - layout.get_baseline() / Pango.SCALE
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(cx - logical.width / 2, top))
+        snapshot.append_layout(layout, color)
+        snapshot.restore()
 
     def _glyph(self, snapshot, text: str, cx: float, row: tuple[int, int], color) -> None:
         layout = self.create_pango_layout(text)
@@ -607,9 +629,11 @@ class MarkdownEditor(Gtk.TextView):
         snapshot.append_layout(layout, color)
         snapshot.restore()
 
-    def _checkbox(self, snapshot, line, info, row, border, accent) -> None:
+    def _checkbox(self, snapshot, line, info, top, border, accent) -> None:
+        # Centred between the baseline and the top of capitals, like the text beside it.
+        middle = top + self._baseline(line, info) - self._cap_height() / 2
         x = self._slot_x(info.depth) - CHECKBOX / 2
-        y = row[0] + (row[1] - CHECKBOX) / 2
+        y = round(middle - CHECKBOX / 2)
         box = _rect(x, y, CHECKBOX, CHECKBOX)
         self._checkboxes[line] = box
         rounded = Gsk.RoundedRect()

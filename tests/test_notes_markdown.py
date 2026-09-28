@@ -48,7 +48,10 @@ def one(line: str) -> LineInfo:
         ("2025. was a year", "ordered"),
         ("> quoted", "quote"),
         (">> deeper", "quote"),
-        (">", "quote"),
+        (">", "text"),  # waits for the space
+        ("> ", "quote"),
+        (">>", "text"),
+        (">> ", "quote"),
         ("->x", "text"),
         (">x", "text"),
         ("---", "rule"),
@@ -173,3 +176,8 @@ def test_renumber_keeps_start_and_restarts_after_bullets():
     assert renumber(lines, classify(lines)) == []
     lines = ["9. a", "9. b", "9. c"]  # 9 -> 10 changes the width
     assert renumber(lines, classify(lines)) == [(1, 0, 1, "10"), (2, 0, 1, "11")]
+
+
+def test_bare_quote_marker_continues_a_quote_only():
+    kinds = [i.kind for i in classify(["> first", ">", "> second", "", ">"])]
+    assert kinds == ["quote", "quote", "quote", "blank", "text"]
