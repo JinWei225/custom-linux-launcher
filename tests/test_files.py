@@ -170,6 +170,8 @@ def test_display_helpers():
     assert display_dir("/home/me/Downloads/x", home="/home/me") == "~/Downloads/x"
     assert display_dir("/home/me", home="/home/me") == "~"
     assert display_dir("/home/meow", home="/home/me") == "/home/meow"
+    assert display_dir("/home/me2/Notes", home="/home/me") == "/home/me2/Notes"
+    assert display_dir("/mnt/home/me/Notes", home="/home/me") == "/mnt/home/me/Notes"
     assert ago(NOW - 30, NOW) == "just now"
     assert ago(NOW - 5 * 3600, NOW) == "5h ago"
     assert ago(NOW - 3 * DAY, NOW) == "3d ago"

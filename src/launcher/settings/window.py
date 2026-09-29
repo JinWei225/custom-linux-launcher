@@ -26,6 +26,7 @@ from ..clipboard_store import read_counts  # noqa: E402
 from ..config import APPEARANCES, Config, ConfigError  # noqa: E402
 from ..config_writer import ConfigWriter  # noqa: E402
 from ..favicons import domain_of  # noqa: E402
+from ..files_index import display_dir  # noqa: E402
 from ..importers import espanso_base, import_espanso, read_espanso  # noqa: E402
 from ..providers.apps import AppEntry, load_apps  # noqa: E402
 from ..timezones import system_zone  # noqa: E402
@@ -314,7 +315,7 @@ class GeneralPage(_Page):
             description="Everything here is stored in this file, which you can also edit "
             "by hand. Changes apply as soon as it is saved.",
         )
-        row = action_row(title=str(paths.config_file()).replace(str(Path.home()), "~"))
+        row = action_row(title=display_dir(str(paths.config_file())))
         row.add_css_class("property")
         button = Gtk.Button(label="Open in Text Editor", valign=Gtk.Align.CENTER)
         button.connect("clicked", lambda _b: window.open_config_file())
@@ -358,7 +359,7 @@ class GeneralPage(_Page):
                 return  # cancelled
             path = folder.get_path()
             if path:
-                shown = path.replace(str(Path.home()), "~", 1)
+                shown = display_dir(path)  # "~/Notes"; "/home/me2/Notes" stays as it is
                 self._save_now(lambda w: w.set_value("notes", "folder", shown))
 
         dialog.select_folder(self.window, None, done)
@@ -602,7 +603,7 @@ class SnippetsPage(_Page):
         status = action_row(
             title="Snippets given to espanso",
             subtitle=f"{with_trigger} with a trigger, in "
-            + str(match_dir / "launcher.yml").replace(str(Path.home()), "~"),
+            + display_dir(str(match_dir / "launcher.yml")),
         )
         status.add_css_class("property")
         group.add(status)
@@ -747,8 +748,7 @@ class FilesPage(_Page):
             path = folder.get_path() if folder else None
             if not path:
                 return
-            home = str(Path.home())
-            shown = "~" + path[len(home) :] if path == home or path.startswith(home + "/") else path
+            shown = display_dir(path)
             current = list(self.window.config.files.folders)
             if shown not in current:
                 self._save_now(lambda w: w.set_value("files", "folders", current + [shown]))
