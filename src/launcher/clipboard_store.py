@@ -161,17 +161,27 @@ class ClipboardStore:
         return [_clip(r) for r in rows]
 
     def search(self, query: str, limit: int) -> list[tuple[Clip, float]]:
-        """Clips matching the query, best first (ties: most recent first)."""
+        """Clips matching the query, best first (ties: most recent first). Pinned clips
+        are never cut off by `limit`, however old they are: they are kept to be found."""
         q = query.strip().casefold()
         if not q:
-            return [(c, 0.0) for c in self.recent(limit)]
+            pinned = self._select("WHERE pinned = 1 ORDER BY created DESC")
+            others = self._select(
+                "WHERE pinned = 0 ORDER BY created DESC LIMIT ?", (max(limit - len(pinned), 0),)
+            )
+            return [(c, 0.0) for c in pinned + others]
         scored = []
         for clip in self.recent(10_000):
             score = _match(q, clip)
             if score is not None:
                 scored.append((clip, score))
         scored.sort(key=lambda pair: (pair[1], pair[0].created), reverse=True)
-        return scored[:limit]
+        pinned = [pair for pair in scored if pair[0].pinned]
+        others = [pair for pair in scored if not pair[0].pinned]
+        return pinned + others[: max(limit - len(pinned), 0)]
+
+    def _select(self, where: str, params: tuple = ()) -> list[Clip]:
+        return [_clip(r) for r in self._db.execute("SELECT * FROM clips " + where, params)]
 
     def get(self, clip_id: int) -> Clip | None:
         row = self._db.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()

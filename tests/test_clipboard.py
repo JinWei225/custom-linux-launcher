@@ -325,3 +325,20 @@ def test_no_section_headers_without_pinned_entries(host):
     store = ClipboardStore(None)
     store.add_text("a", "x")
     assert ClipboardProvider(host, store).query("")[0].section is None
+
+
+def test_old_pinned_entries_are_listed_however_many_newer_ones_there_are(host):
+    store = ClipboardStore(None)
+    old = store.add_text("my pinned thing", "x", now=1000)
+    store.set_pinned(old.id, True)
+    for i in range(300):
+        store.add_text(f"entry {i}", "x", now=2000 + i)
+    results = ClipboardProvider(host, store).query("")
+    assert results[0].title == "my pinned thing" and results[0].section == "Pinned"
+    assert len(results) == 200  # LIMIT in all: the pinned one and the 199 newest others
+    assert results[1].title == "entry 299" and results[-1].title == "entry 101"
+    # A search keeps matching pinned entries even when many others match better.
+    for i in range(300):
+        store.add_text(f"thing {i}", "x", now=3000 + i)
+    found = [r.title for r in ClipboardProvider(host, store).query("thing")]
+    assert "my pinned thing" in found and len(found) == 200
