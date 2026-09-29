@@ -309,11 +309,7 @@ def step_out(lines: list[str], infos: list[LineInfo], n: int) -> str:
         if other.kind == "blank" or (other.kind in LIST_KINDS and other.depth > target):
             continue
         if other.kind in LIST_KINDS and other.depth == target:
-            if other.kind == "ordered":
-                return f"{other.indent}{other.number + 1}{other.delim} "
-            if other.kind == "task":
-                return f"{other.indent}{other.delim} [ ] "
-            return f"{other.indent}{other.delim} "
+            return continuation(lines[above], other)  # as if Enter was pressed there
         break
     return outdent(lines[n])
 
