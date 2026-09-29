@@ -233,6 +233,23 @@ def main() -> int:
     )
     shot(window, "notes-editor")
 
+    # Launcher Settings picks another notes folder: Notes (running all session) switches.
+    type_text(window, "\nbefore the switch")
+    other = NOTES.parent / "Other Notes"
+    other.mkdir()
+    (other / "Elsewhere.md").write_text("# Elsewhere\n")
+    paths.config_file().write_text(f'[notes]\nfolder = "{other}"\n')
+    check("a new notes folder is used at once", wait_for(lambda: window.store.root == other))
+    check("…after saving the open note in the old one",
+          "before the switch" in (NOTES / "Lecture 3.md").read_text())  # fmt: skip
+    check("…and the sidebar lists its notes", ("note", "Elsewhere") in sidebar_rows(window),
+          repr(sidebar_rows(window)))  # fmt: skip
+    window.open_note(str(other / "Elsewhere.md"))  # what the launcher's search passes
+    check("a note from the new folder opens",
+          window.session is not None and window.session.rel == "Elsewhere.md")  # fmt: skip
+    paths.config_file().write_text(f'[notes]\nfolder = "{NOTES}"\n')
+    check("…and back", wait_for(lambda: window.store.root == NOTES))
+
     # Narrow window: the sidebar overlays instead of taking space.
     window.unmaximize()
     window.set_default_size(560, 700)

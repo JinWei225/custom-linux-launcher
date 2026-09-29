@@ -96,7 +96,8 @@ class NotesWindow(Adw.ApplicationWindow):
         self._add_actions(app)
         self.refresh()
         last = self._state.get("last")
-        if isinstance(last, str) and self.store.mtime(last) is not None:
+        same_folder = self._state.get("folder", str(self.store.root)) == str(self.store.root)
+        if isinstance(last, str) and same_folder and self.store.mtime(last) is not None:
             self.open_note(last)
         else:
             self._show_empty()
@@ -498,6 +499,7 @@ class NotesWindow(Adw.ApplicationWindow):
             "maximized": self.is_maximized(),
             "sidebar": self.split.get_show_sidebar() or self.split.get_collapsed(),
             "expanded": sorted(self._expanded),
+            "folder": str(self.store.root),  # what "last" and "expanded" are relative to
         }
         try:
             state_file().parent.mkdir(parents=True, exist_ok=True)
@@ -531,10 +533,30 @@ class NotesWindow(Adw.ApplicationWindow):
         try:
             config, _ = load_config(paths.config_file())
         except ConfigError as e:
-            log.warning("config: %s (keeping the current appearance)", e)
+            log.warning("config: %s (keeping the current appearance and folder)", e)
             return GLib.SOURCE_REMOVE
         appearance.apply(config.ui.appearance)
+        if notes_folder(config) != self.store.root:
+            self.use_folder(notes_folder(config))
         return GLib.SOURCE_REMOVE
+
+    def use_folder(self, folder: Path) -> None:
+        """Switch to another notes folder (chosen in Launcher Settings) right away: Notes
+        keeps running all session, so waiting for a restart would mean never."""
+        log.info("notes folder changed to %s", folder)
+        self._leave_note()  # saved into the old folder
+        for monitor in self._monitors.values():
+            monitor.cancel()
+        self._monitors = {}
+        self.store = NotesStore(folder, trash=_trash)
+        try:
+            self.store.ensure()
+        except OSError as e:
+            self.toast(f"Could not create {folder}: {e.strerror or e}")
+        self._expanded = set()
+        self._state.pop("last", None)
+        self._show_empty()
+        self.refresh()
 
     def _watch(self, folders: list[str]) -> None:
         wanted = set(folders)

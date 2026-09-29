@@ -360,7 +360,6 @@ class GeneralPage(_Page):
             if path:
                 shown = path.replace(str(Path.home()), "~", 1)
                 self._save_now(lambda w: w.set_value("notes", "folder", shown))
-                self.window.toast("Reopen Notes to use the new folder")
 
         dialog.select_folder(self.window, None, done)
 
