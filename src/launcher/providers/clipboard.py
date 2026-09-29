@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..clipboard_store import Clip, ClipboardStore, first_line
+from ..clipboard_store import LISTED_CHARS, Clip, ClipboardStore, first_line
 from ..files_index import ago
 from .base import Host, Result
 
 # The list scrolls in clipboard mode, so show far more than the usual result count.
 LIMIT = 200
-PREVIEW_CHARS = 20_000
+PREVIEW_CHARS = LISTED_CHARS  # listings carry this much of each text
 
 
 def human_size(size: int) -> str:
@@ -60,11 +60,11 @@ class ClipboardProvider:
             preview = ("image", preview_path) if preview_path else None
         else:
             title = first_line(clip.text)
-            chars = len(clip.text)
+            chars = clip.chars
             parts.append(f"{chars:,} character{'s' if chars != 1 else ''}")
             icon = "text-x-generic"
             shown = clip.text[:PREVIEW_CHARS]
-            if len(clip.text) > PREVIEW_CHARS:
+            if clip.chars > PREVIEW_CHARS:
                 shown += "\n\n… (preview truncated)"
             preview = ("text", shown)
         return Result(

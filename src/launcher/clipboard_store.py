@@ -25,6 +25,8 @@ from .ranking import fuzzy_score
 log = logging.getLogger(__name__)
 
 MAX_TEXT_BYTES = 1024 * 1024
+MATCH_CHARS = 5000  # how much of an entry's text a search looks at
+LISTED_CHARS = 20_000  # how much text listings carry (what the preview shows)
 # Password managers mark secrets with these content types (KeePassXC, KDE).
 SECRET_HINTS = ("x-kde-passwordManagerHint", "application/x-nspasteboard-concealed-type")
 TEXT_TYPES = ("text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT")
@@ -71,6 +73,30 @@ class Clip:
     width: int = 0
     height: int = 0
     digest: str = ""
+    chars: int = 0  # length of the whole text: in listings `text` is cut to LISTED_CHARS
+
+
+@dataclass(frozen=True)
+class _Searchable:
+    """What a search needs of an entry, kept in memory between keystrokes."""
+
+    id: int
+    created: float
+    pinned: bool
+    head: str  # the start of the text, casefolded ("" for images)
+    title: str  # its first line, casefolded
+    label: str | None  # images: "image png <source>"
+
+
+# Listings don't read whole texts (up to 1 MB each); deleting reads no text at all.
+_LISTED = (
+    f"id, kind, substr(text, 1, {LISTED_CHARS}) AS text, length(text) AS chars, mime, size,"
+    " source, created, pinned, width, height, digest"
+)
+_FULL = "*, length(text) AS chars"
+_BARE = (
+    "id, kind, '' AS text, 0 AS chars, mime, size, source, created, pinned, width, height, digest"
+)
 
 
 class ClipboardStore:
@@ -98,6 +124,7 @@ class ClipboardStore:
         self._db.execute("CREATE INDEX IF NOT EXISTS clips_created ON clips (created)")
         self._db.commit()
         self._blobs: dict[str, bytes] = {}  # in-memory mode only
+        self._searchable: list[_Searchable] | None = None  # built on the first search
 
     # --- adding --------------------------------------------------------------------------
 
@@ -152,39 +179,67 @@ class ClipboardStore:
                 (kind, text, mime, size, source, now, width, height, digest),
             )
         self._db.commit()
+        self._changed()
         return self._by_digest(digest)
 
     # --- reading -------------------------------------------------------------------------
 
     def recent(self, limit: int) -> list[Clip]:
-        rows = self._db.execute("SELECT * FROM clips ORDER BY created DESC LIMIT ?", (limit,))
-        return [_clip(r) for r in rows]
+        return self._select(_LISTED, "ORDER BY created DESC LIMIT ?", (limit,))
 
     def search(self, query: str, limit: int) -> list[tuple[Clip, float]]:
         """Clips matching the query, best first (ties: most recent first). Pinned clips
         are never cut off by `limit`, however old they are: they are kept to be found."""
         q = query.strip().casefold()
         if not q:
-            pinned = self._select("WHERE pinned = 1 ORDER BY created DESC")
+            pinned = self._select(_LISTED, "WHERE pinned = 1 ORDER BY created DESC")
             others = self._select(
-                "WHERE pinned = 0 ORDER BY created DESC LIMIT ?", (max(limit - len(pinned), 0),)
+                _LISTED,
+                "WHERE pinned = 0 ORDER BY created DESC LIMIT ?",
+                (max(limit - len(pinned), 0),),
             )
             return [(c, 0.0) for c in pinned + others]
         scored = []
-        for clip in self.recent(10_000):
-            score = _match(q, clip)
+        for entry in self._search_index():
+            score = _match(q, entry)
             if score is not None:
-                scored.append((clip, score))
+                scored.append((entry, score))
         scored.sort(key=lambda pair: (pair[1], pair[0].created), reverse=True)
         pinned = [pair for pair in scored if pair[0].pinned]
         others = [pair for pair in scored if not pair[0].pinned]
-        return pinned + others[: max(limit - len(pinned), 0)]
+        chosen = pinned + others[: max(limit - len(pinned), 0)]
+        clips = self._by_ids([entry.id for entry, _score in chosen])
+        return [(clips[e.id], score) for e, score in chosen if e.id in clips]
 
-    def _select(self, where: str, params: tuple = ()) -> list[Clip]:
-        return [_clip(r) for r in self._db.execute("SELECT * FROM clips " + where, params)]
+    def _search_index(self) -> list[_Searchable]:
+        """Every entry's searchable text, read once and kept until the history changes
+        (instead of reading and casefolding every text on every keystroke)."""
+        if self._searchable is None:
+            rows = self._db.execute(
+                f"SELECT id, kind, created, pinned, mime, source,"
+                f" substr(text, 1, {MATCH_CHARS}) AS head FROM clips"
+            )
+            self._searchable = [_searchable(r) for r in rows]
+        return self._searchable
+
+    def _changed(self) -> None:
+        self._searchable = None
+
+    def _select(self, columns: str, where: str, params: tuple = ()) -> list[Clip]:
+        rows = self._db.execute(f"SELECT {columns} FROM clips {where}", params)
+        return [_clip(r) for r in rows]
+
+    def _by_ids(self, ids: list[int]) -> dict[int, Clip]:
+        found: dict[int, Clip] = {}
+        for i in range(0, len(ids), 500):  # SQLite limits the number of ? in a query
+            chunk = ids[i : i + 500]
+            marks = ",".join("?" * len(chunk))
+            for clip in self._select(_LISTED, f"WHERE id IN ({marks})", tuple(chunk)):
+                found[clip.id] = clip
+        return found
 
     def get(self, clip_id: int) -> Clip | None:
-        row = self._db.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        row = self._db.execute(f"SELECT {_FULL} FROM clips WHERE id = ?", (clip_id,)).fetchone()
         return _clip(row) if row else None
 
     def content(self, clip_id: int) -> tuple[str, bytes] | None:
@@ -211,6 +266,7 @@ class ClipboardStore:
     def set_pinned(self, clip_id: int, pinned: bool) -> None:
         self._db.execute("UPDATE clips SET pinned = ? WHERE id = ?", (int(pinned), clip_id))
         self._db.commit()
+        self._changed()
 
     def delete(self, clip_id: int) -> None:
         clip = self.get(clip_id)
@@ -218,6 +274,7 @@ class ClipboardStore:
             return
         self._db.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         self._db.commit()
+        self._changed()
         self._remove_files(clip)
 
     def clear(self, keep_pinned: bool = True, since: float | None = None) -> int:
@@ -229,7 +286,7 @@ class ClipboardStore:
             conditions.append("created >= ?")
             params.append(since)
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        doomed = [_clip(r) for r in self._db.execute("SELECT * FROM clips" + where, params)]
+        doomed = self._select(_BARE, where, tuple(params))
         self._delete_many(doomed)
         return len(doomed)
 
@@ -241,10 +298,7 @@ class ClipboardStore:
     def prune(self, max_entries: int, max_days: int, now: float | None = None) -> int:
         """Drop unpinned clips beyond the count or older than max_days."""
         now = time.time() if now is None else now
-        unpinned = [
-            _clip(r)
-            for r in self._db.execute("SELECT * FROM clips WHERE pinned = 0 ORDER BY created DESC")
-        ]
+        unpinned = self._select(_BARE, "WHERE pinned = 0 ORDER BY created DESC")
         cutoff = now - max_days * 86400
         doomed = [c for i, c in enumerate(unpinned) if i >= max_entries or c.created < cutoff]
         self._delete_many(doomed)
@@ -260,11 +314,12 @@ class ClipboardStore:
             return
         self._db.executemany("DELETE FROM clips WHERE id = ?", [(c.id,) for c in clips])
         self._db.commit()
+        self._changed()
         for clip in clips:
             self._remove_files(clip)
 
     def _by_digest(self, digest: str) -> Clip | None:
-        row = self._db.execute("SELECT * FROM clips WHERE digest = ?", (digest,)).fetchone()
+        row = self._db.execute(f"SELECT {_FULL} FROM clips WHERE digest = ?", (digest,)).fetchone()
         return _clip(row) if row else None
 
     def _write(self, name: str, data: bytes) -> None:
@@ -308,19 +363,29 @@ def _clip(row: sqlite3.Row) -> Clip:
         width=row["width"],
         height=row["height"],
         digest=row["digest"],
+        chars=row["chars"],
     )
 
 
-def _match(q: str, clip: Clip) -> float | None:
-    if clip.kind == "image":
-        label = f"image {clip.mime.removeprefix('image/')} {clip.source}"
-        return fuzzy_score(q, label)
-    head = clip.text[:5000].casefold()
-    title = first_line(clip.text).casefold()
-    if q in head:
+def _searchable(row: sqlite3.Row) -> _Searchable:
+    if row["kind"] == "image":
+        label = f"image {row['mime'].removeprefix('image/')} {row['source']}"
+        return _Searchable(row["id"], row["created"], bool(row["pinned"]), "", "", label)
+    head = row["head"]
+    return _Searchable(
+        row["id"], row["created"], bool(row["pinned"]), head.casefold(),
+        first_line(head).casefold(), None,
+    )  # fmt: skip
+
+
+def _match(q: str, entry: _Searchable) -> float | None:
+    if entry.label is not None:
+        return fuzzy_score(q, entry.label)
+    if q in entry.head:
         # Prefer matches you can see in the list (the first line), then at the start.
-        return 0.7 + (0.05 if q in title else 0.0) + (0.1 if head.startswith(q) else 0.0)
-    score = fuzzy_score(q, title)
+        title_bonus = 0.05 if q in entry.title else 0.0
+        return 0.7 + title_bonus + (0.1 if entry.head.startswith(q) else 0.0)
+    score = fuzzy_score(q, entry.title)
     return score * 0.8 if score is not None else None
 
 

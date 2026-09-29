@@ -342,3 +342,43 @@ def test_old_pinned_entries_are_listed_however_many_newer_ones_there_are(host):
         store.add_text(f"thing {i}", "x", now=3000 + i)
     found = [r.title for r in ClipboardProvider(host, store).query("thing")]
     assert "my pinned thing" in found and len(found) == 200
+
+
+def test_searches_follow_every_change_to_the_history():
+    store = ClipboardStore(None)
+    a = store.add_text("apple pie", "x", now=1)
+    assert [c.text for c, _ in store.search("apple", 10)] == ["apple pie"]  # index built
+    store.add_text("apple tart", "x", now=2)
+    assert [c.text for c, _ in store.search("apple", 10)] == ["apple tart", "apple pie"]
+    store.set_pinned(a.id, True)
+    assert [c.pinned for c, _ in store.search("apple", 10)] == [True, False]
+    store.delete(a.id)
+    assert [c.text for c, _ in store.search("apple", 10)] == ["apple tart"]
+    store.add_text("apple tart", "x", now=3)  # copied again: moves up, no duplicate
+    store.add_text("banana", "x", now=4)
+    assert [c.text for c, _ in store.search("a", 10)][:2] == ["apple tart", "banana"]
+    store.clear()
+    assert store.search("apple", 10) == []
+    store.add_text("old apple", "x", now=1)
+    store.prune(10, 1, now=10 * 86400)
+    assert store.search("apple", 10) == []
+
+
+def test_listings_carry_the_start_of_long_texts_and_their_full_length(host):
+    from launcher.clipboard_store import LISTED_CHARS
+
+    store = ClipboardStore(None)
+    long = "first line\n" + "é" * 100_000
+    clip = store.add_text(long, "x")
+    listed = store.recent(1)[0]
+    assert len(listed.text) == LISTED_CHARS and listed.chars == len(long)
+    assert store.search("first", 1)[0][0].chars == len(long)
+    assert store.get(clip.id).text == long  # pasting gets all of it
+    assert store.content(clip.id) == ("text/plain;charset=utf-8", long.encode())
+    result = ClipboardProvider(host, store).query("")[0]
+    assert result.title == "first line"
+    assert f"{len(long):,} characters" in result.subtitle
+    assert result.preview[1].endswith("(preview truncated)")
+    # A match beyond what a search looks at isn't found.
+    store.add_text("x" * 6000 + " needle", "x")
+    assert store.search("needle", 5) == []
