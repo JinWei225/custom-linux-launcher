@@ -77,7 +77,7 @@ def test_marker_positions():
     t = one("- [x] done")
     assert (t.hidden, t.content, t.checked) == (6, 6, True)
     o = one("\t3. third")
-    assert (o.hidden, o.marker, o.content, o.number, o.delim) == (4, 4, 4, 3, ".")
+    assert (o.hidden, o.marker, o.content, o.number, o.delim) == (1, 4, 4, 3, ".")
     q = one(">> deep")
     assert (q.depth, q.hidden, q.content) == (2, 3, 3)
     r = one("---")

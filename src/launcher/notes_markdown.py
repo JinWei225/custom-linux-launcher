@@ -9,7 +9,8 @@ Kinds and which leading characters are markup:
   heading  "## Title"      marker "## " (shown dim on the cursor's line, hidden elsewhere)
   bullet   "\\t- item"     hidden "\\t- " (a bullet is drawn instead)
   task     "- [ ] item"    hidden "- [ ] " (a checkbox is drawn instead)
-  ordered  "\\t1. item"    hidden "\\t1. " (the number is drawn: 1. / a) / i. by level)
+  ordered  "\\t1. item"    hidden "\\t", marker "\\t1. " (the number is drawn: 1. / a) / i. by
+                           level; the editor shows "1. " itself while it is being edited)
   quote    "> text"        hidden "> " (a bar is drawn instead); needs the space
   rule     "---"           the whole line (a line is drawn instead)
   fence    "```python"     shown dim; lines between two fences are "code"
@@ -56,7 +57,7 @@ class LineInfo:
     kind: str  # blank text heading bullet task ordered quote rule fence code
     depth: int = 0  # list nesting (0 = top) or quote depth (1 = ">")
     level: int = 0  # heading level
-    hidden: int = 0  # leading characters always hidden (indent + bullet/checkbox/quote)
+    hidden: int = 0  # leading characters always hidden (indent, bullet/checkbox/quote)
     marker: int = 0  # leading characters that are markup (heading, ordered number, rule)
     content: int = 0  # column where the text itself starts
     number: int = 0  # ordered lists
@@ -133,7 +134,7 @@ def _classify_line(line: str) -> LineInfo:
         )
     if m := _ORDERED.match(line):
         return LineInfo(
-            "ordered", hidden=m.end(), marker=m.end(), content=m.end(),
+            "ordered", hidden=m.end(1), marker=m.end(), content=m.end(),
             number=int(m.group(2)), delim=m.group(3), indent=m.group(1),
         )  # fmt: skip
     if m := _QUOTE.match(line):

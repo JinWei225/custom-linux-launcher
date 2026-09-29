@@ -228,6 +228,53 @@ def main() -> int:
     t.go(1, 4)
     t.key(Gdk.KEY_Home)
     check("Home goes to the text, not into the number", t.cursor().get_line_offset() == 4)
+
+    # The number can still be edited: Left at the start of the text steps into it.
+    t.clear()
+    t.type("1. a\nb")
+    t.go(0, 3)
+    t.key(Gdk.KEY_Left)
+    check("Left at the text steps into the number",
+          t.cursor().get_line_offset() == 2 and "md-markup" in t.tags(0, 0),
+          f"{t.cursor().get_line_offset()} {t.tags(0, 0)}")  # fmt: skip
+    check("…which shows as text instead of being drawn", 0 not in labels(), repr(labels()))
+    t.go(0, 0)
+    check("the cursor may stay in the open number", t.cursor().get_line_offset() == 0)
+    window.buffer.begin_user_action()
+    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(0, c)[1] for c in (0, 1)))
+    window.buffer.insert(window.buffer.get_iter_at_line_offset(0, 0)[1], "3")
+    window.buffer.end_user_action()
+    pump(0.05)
+    check("changing the first number renumbers the list from it", t.text() == "3. a\n4. b",
+          repr(t.text()))  # fmt: skip
+    window.buffer.begin_user_action()
+    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(0, c)[1] for c in (1, 2)))
+    window.buffer.insert(window.buffer.get_iter_at_line_offset(0, 1)[1], ")")
+    window.buffer.end_user_action()
+    pump(0.05)
+    check("the delimiter can be changed too", t.text().startswith("3) a"), repr(t.text()))
+    t.key(Gdk.KEY_Return)
+    pump(0.05)
+    check("Enter in the number goes back to the text",
+          t.text() == "3) a\n4. b" and t.cursor().get_line_offset() == 3
+          and "md-hidden" in t.tags(0, 0) and labels().get(0) == "3)",
+          f"{t.text()!r} {t.cursor().get_line_offset()} {labels()}")  # fmt: skip
+    t.go(1, 3)
+    t.key(Gdk.KEY_Left)
+    t.go(0, 4)
+    check("moving away closes the number", "md-hidden" in t.tags(1, 0) and 1 in labels(),
+          repr(labels()))  # fmt: skip
+    box = window.editor._number_boxes.get(1)
+    check("the drawn number has a click target", box is not None)
+    if box is not None:
+        cx, cy = box.get_x() + box.get_width() / 2, box.get_y() + box.get_height() / 2
+        wx, wy = window.editor.buffer_to_window_coords(Gtk.TextWindowType.WIDGET, int(cx), int(cy))
+        window.editor._on_click(Gtk.GestureClick(), 1, wx, wy)
+        pump(0.1)
+        check("clicking the number opens it",
+              t.cursor().get_line() == 1 and t.cursor().get_line_offset() == 0
+              and "md-markup" in t.tags(1, 0), repr(t.tags(1, 0)))  # fmt: skip
+
     t.clear()
     t.type("1. a\nb\nc")
     t.go(1, 4)

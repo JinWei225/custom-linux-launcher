@@ -4,8 +4,11 @@ The buffer always holds the plain markdown. After every change each line is clas
 (notes_markdown.classify) and only lines whose kind changed are re-tagged:
 
 - headings get a bigger font; their "## " is dimmed on the cursor's line, hidden elsewhere
-- list, checkbox and quote markers are always hidden; a bullet, checkbox or bar is drawn
-  in their place (snapshot_layer), and the lines are indented with tag margins
+- list, checkbox and quote markers are always hidden; a bullet, checkbox, bar or list
+  number is drawn in their place (snapshot_layer), and the lines are indented with tag
+  margins. A list number can still be edited: Left at the start of the item's text (or a
+  click on the number) opens it, shown as its "1. "; Enter or going back to the text
+  closes it
 - "---" is drawn as a line (its text shows on the cursor's line); code blocks get a
   monospace font on a rounded background
 
@@ -109,6 +112,8 @@ class MarkdownEditor(Gtk.TextView):
         self._checkboxes: dict[int, Graphene.Rect] = {}  # line -> drawn box (buffer coords)
         self._bullets: dict[int, float] = {}  # line -> baseline the bullet was drawn on
         self._numbers: dict[int, tuple[str, float, float]] = {}  # line -> label, right x, baseline
+        self._number_boxes: dict[int, Graphene.Rect] = {}  # line -> drawn number (buffer coords)
+        self._number_line: int | None = None  # the numbered item whose "1. " is being edited
         self._levels: list[int] = []  # per line: numbered lists it is nested in (1. / a) / i.)
         # Set by the window for the open note: where its pictures are, what to call new
         # ones, and what to do with Ctrl+clicked links and errors.
@@ -396,6 +401,9 @@ class MarkdownEditor(Gtk.TextView):
             span(self.t_list[info.depth], 0)
             if info.hidden:
                 span(self.t_hidden, 0, info.hidden)
+            if kind == "ordered":
+                shown = line == self._number_line
+                span(self.t_markup if shown else self.t_hidden, info.hidden, info.marker)
             if kind == "task" and info.checked:
                 span(self.t_done, info.content, len(self._lines[line]))
         elif kind == "quote":
@@ -437,6 +445,7 @@ class MarkdownEditor(Gtk.TextView):
         self._cursor_idle = 0
         if self.buffer.get_line_count() == len(self._infos):  # else a restyle is due
             self._sync_cursor_markup()
+            self._sync_number()
             self._keep_cursor_out_of_markers(self._cursor())
         return GLib.SOURCE_REMOVE
 
@@ -453,17 +462,57 @@ class MarkdownEditor(Gtk.TextView):
                 self._style_line(n)
         self.buffer.move_mark(self._shown, self._line_start(line))
 
+    def _sync_number(self) -> None:
+        """Close the number being edited once the cursor has left it. Checked once an
+        edit is over (on idle), not mid-edit: changing "3." to "3)" passes through "3 "."""
+        line = self._number_line
+        if line is None:
+            return
+        cursor = self._cursor()
+        info = self._infos[line] if line < len(self._infos) else None
+        if (
+            info is not None
+            and info.kind == "ordered"
+            and cursor.get_line() == line
+            and info.hidden <= cursor.get_line_offset() < info.content
+        ):
+            return
+        self._number_line = None
+        if info is not None:
+            self._style_line(line)
+        self.queue_draw()
+
+    def _open_number(self, line: int, column: int) -> None:
+        """Show a numbered item's "1. " so it can be edited, with the cursor at column."""
+        self._number_line = line
+        self._style_line(line)
+        it = self._line_start(line)
+        it.set_line_offset(column)
+        self.buffer.place_cursor(it)
+        self.queue_draw()
+
     def _keep_cursor_out_of_markers(self, cursor: Gtk.TextIter) -> None:
-        """A cursor inside a hidden marker (Home, arrow keys, a click) moves to the text."""
+        """A cursor inside a hidden marker (Home, arrow keys, a click) moves to the text;
+        inside a number being edited it may stay (but not in the indent before it)."""
         if self._editing or self.buffer.get_has_selection():
             return
         line = cursor.get_line()
         if line >= len(self._infos):
             return
         info = self._infos[line]
-        if not info.hidden or cursor.get_line_offset() >= info.hidden:
+        col = cursor.get_line_offset()
+        if info.kind == "ordered" and line == self._number_line:
+            if col >= info.hidden:
+                return
+            target = info.hidden
+        elif info.kind == "ordered":
+            if col >= info.content:
+                return
+            target = info.content
+        elif not info.hidden or col >= info.hidden:
             return
-        target = info.content
+        else:
+            target = info.content
         it = self._line_start(line)
         it.set_line_offset(min(target, it.get_chars_in_line()))
         self._editing = True
@@ -589,6 +638,9 @@ class MarkdownEditor(Gtk.TextView):
         if self.buffer.get_has_selection() or (here := self._current()) is None:
             return False
         line, col, text, info = here
+        if info.kind == "ordered" and line == self._number_line:
+            self._open_number_done(line, info)  # Enter in the number: back to the text
+            return True
         if info.kind in (*md.LIST_KINDS, "quote") and col >= info.content:
             if md.is_empty_item(text, info):
                 # Enter on an empty item: step out one level (as an item of the list it
@@ -643,13 +695,24 @@ class MarkdownEditor(Gtk.TextView):
         self._user_edit(edit)
         return True
 
+    def _open_number_done(self, line: int, info: md.LineInfo) -> None:
+        it = self._line_start(line)
+        it.set_line_offset(min(info.content, it.get_chars_in_line()))
+        self.buffer.place_cursor(it)  # _sync_number closes it
+
     def _left_over_marker(self) -> bool:
         """Left at the start of an item's text goes to the previous line, not into the
-        hidden marker."""
+        hidden marker; on a numbered item it steps into the number, to edit it."""
         if self.buffer.get_has_selection() or (here := self._current()) is None:
             return False
-        line, col, _text, info = here
-        if not info.hidden or col != info.content:
+        line, col, text, info = here
+        if info.kind == "ordered" and line != self._number_line and col == info.content:
+            self._open_number(line, len(text[: info.content].rstrip()))  # after the "."
+            return True
+        if info.kind == "ordered":
+            if line != self._number_line or col != info.hidden:
+                return False
+        elif not info.hidden or col != info.content:
             return False
         it = self._line_start(line)
         if line > 0:
@@ -740,6 +803,11 @@ class MarkdownEditor(Gtk.TextView):
             if self.link_handler is not None:
                 self.link_handler(url)
             return
+        for line, box in self._number_boxes.items():
+            if box.contains_point(Graphene.Point().init(bx, by)):
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+                self._open_number(line, self._infos[line].hidden)
+                return
         for line, box in self._checkboxes.items():
             pad = 4  # a slightly bigger target than the drawn box
             if box.get_x() - pad <= bx <= box.get_x() + box.get_width() + pad and (
@@ -889,6 +957,7 @@ class MarkdownEditor(Gtk.TextView):
         self._checkboxes = {}
         self._bullets = {}
         self._numbers = {}
+        self._number_boxes = {}
 
         self._draw_code_blocks(snapshot, top, bottom, width, faint)
         it, _ = self.get_line_at_y(top)
@@ -903,13 +972,15 @@ class MarkdownEditor(Gtk.TextView):
                 baseline = y + self._baseline(line, info)
                 self._bullets[line] = baseline
                 self._glyph_on_baseline(snapshot, glyph, self._slot_x(info.depth), baseline, fg)
-            elif info.kind == "ordered":
+            elif info.kind == "ordered" and line != self._number_line:  # else "1. " shows
                 level = self._levels[line] if line < len(self._levels) else 0
                 label = md.list_label(info.number, level, info.delim)
                 baseline = y + self._baseline(line, info)
                 right = self._margin + (info.depth + 1) * LIST_STEP - NUMBER_GAP
                 self._numbers[line] = (label, right, baseline)
-                self._label_on_baseline(snapshot, label, right, baseline, fg)
+                self._number_boxes[line] = self._label_on_baseline(
+                    snapshot, label, right, baseline, fg
+                )
             elif info.kind == "task":
                 self._checkbox(snapshot, line, info, y, dim, accent)
             elif info.kind == "quote":
@@ -961,9 +1032,11 @@ class MarkdownEditor(Gtk.TextView):
         snapshot.append_layout(layout, color)
         snapshot.restore()
 
-    def _label_on_baseline(self, snapshot, text: str, right: float, baseline: float, color):
+    def _label_on_baseline(
+        self, snapshot, text: str, right: float, baseline: float, color
+    ) -> Graphene.Rect:
         """A list number ending at `right`, on the text's baseline (long ones like "xviii."
-        reach into the margin, as in Notion)."""
+        reach into the margin, as in Notion). Returns where it was drawn."""
         layout = self.create_pango_layout(text)
         _ink, logical = layout.get_pixel_extents()
         top = baseline - layout.get_baseline() / Pango.SCALE
@@ -971,6 +1044,7 @@ class MarkdownEditor(Gtk.TextView):
         snapshot.translate(Graphene.Point().init(right - logical.width, top))
         snapshot.append_layout(layout, color)
         snapshot.restore()
+        return _rect(right - logical.width, top, logical.width, logical.height)
 
     def _glyph(self, snapshot, text: str, cx: float, row: tuple[int, int], color) -> None:
         layout = self.create_pango_layout(text)
