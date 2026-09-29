@@ -271,7 +271,8 @@ class NotesStore:
 
     def move(self, rel: str, folder: str) -> str:
         """Move a note to another folder, with the attachments it links to (they live
-        in attachments/ next to the note, so its links keep working)."""
+        in attachments/ next to the note, so its links keep working). An attachment
+        another note in the old folder links to as well is copied instead."""
         path = self.path(rel)
         directory = self.path(folder)
         if path.parent == directory:
@@ -283,12 +284,16 @@ class NotesStore:
         except OSError:
             links = []
         os.rename(path, target)
+        shared = _linked_from(path.parent) if links else set()  # by the notes left behind
         for link in links:
             source = path.parent / link
             if source.is_file() and not (directory / link).exists():
                 (directory / ATTACHMENTS).mkdir(exist_ok=True)
                 try:
-                    os.rename(source, directory / link)
+                    if link in shared:
+                        shutil.copy2(source, directory / link)
+                    else:
+                        os.rename(source, directory / link)
                 except OSError as e:
                     log.warning("could not move attachment %s: %s", source, e)
         new = self._rel(target)
@@ -361,6 +366,21 @@ class NotesStore:
             n += 1
             candidate = f"{name} {n}.md"
         return directory / candidate
+
+
+def _linked_from(directory: Path) -> set[str]:
+    """The attachments the notes in a folder link to."""
+    links: set[str] = set()
+    try:
+        notes = [p for p in directory.iterdir() if p.suffix.lower() == ".md" and p.is_file()]
+    except OSError:
+        return links
+    for note in notes:
+        try:
+            links.update(attachment_links(note.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+    return links
 
 
 def flatten(folder: Folder) -> list[Note]:

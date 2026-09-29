@@ -335,3 +335,16 @@ def test_move_takes_the_notes_attachments_along(store):
     assert (store.root / "FYP/attachments/s.pdf").exists()
     assert (store.root / "attachments/other.png").exists()  # not linked: stays
     assert store.attachments_dir("FYP/Lecture.md") == store.root / "FYP/attachments"
+
+
+def test_move_copies_an_attachment_another_note_still_uses(store):
+    write(store, "Lecture.md", "# L\n![](attachments/shared.png)\n![](attachments/mine.png)\n")
+    write(store, "Summary.md", "# S\nsee ![](attachments/shared.png)\n")
+    write(store, "attachments/shared.png", "shared")
+    write(store, "attachments/mine.png", "mine")
+    store.create_folder("", "FYP")
+    store.move("Lecture.md", "FYP")
+    assert (store.root / "FYP/attachments/shared.png").read_text() == "shared"
+    assert (store.root / "attachments/shared.png").read_text() == "shared"  # Summary's link
+    assert (store.root / "FYP/attachments/mine.png").exists()
+    assert not (store.root / "attachments/mine.png").exists()  # only this note used it
