@@ -270,8 +270,7 @@ class FileIndex:
         self._rebuild_blob()
         # Regex over one big string runs in C: only names containing the query's
         # characters in order survive, then Python scores just those.
-        chars = [re.escape(ch) for ch in q if not ch.isspace()]
-        pattern = re.compile("[^\n]*?".join(chars))
+        pattern = re.compile(subsequence_pattern(q))
         seen = set()
         out = []
         for match in pattern.finditer(self._blob):
@@ -293,6 +292,19 @@ class FileIndex:
             offset += len(name) + 1
         self._blob = "\n".join(names)
         self._dirty = False
+
+
+def subsequence_pattern(q: str) -> str:
+    """A regex for "the query's characters in this order, within one line". Between two
+    characters it skips anything but the next one ("a[^\\nb]*b"), so it never backtracks:
+    "a[^\\n]*?b" took minutes on a name like "eeee…" (40 e's) for a query that missed."""
+    chars = [ch for ch in q if not ch.isspace()]
+    if not chars:
+        return ""
+    parts = [re.escape(chars[0])]
+    for ch in chars[1:]:
+        parts.append(f"[^\\n{re.escape(ch)}]*{re.escape(ch)}")
+    return "".join(parts)
 
 
 def _recency(mtime: float, now: float) -> float:

@@ -185,3 +185,39 @@ def test_provider_actions(tree, host):
     result.alt_action()
     path = str(tree / "notes" / "meeting notes.txt")
     assert host.calls == [("open-file", path), ("reveal", path)]
+
+
+def _is_subsequence(q, name):
+    it = iter(name)
+    return all(ch in it for ch in q if not ch.isspace())
+
+
+@pytest.mark.parametrize(
+    "query", ["abc", "a.c", "[x]", "a-b", "^$", "a\\b", "ee", "report 2024", "é中"]
+)
+def test_subsequence_pattern_matches_like_a_subsequence(query):
+    import re
+
+    from launcher.files_index import subsequence_pattern
+
+    names = ["abc", "a.b.c", "[x]", "a-b", "x^y$", "a\\b", "report_2024.pdf", "é-中文", "cab", "e"]
+    pattern = re.compile(subsequence_pattern(query))
+    for name in names:
+        assert bool(pattern.search(name)) == _is_subsequence(query, name), (query, name)
+
+
+def test_names_with_long_runs_of_one_letter_search_fast():
+    import time
+
+    from launcher.files_index import FileEntry, IndexState
+
+    state = IndexState()
+    for i in range(200):
+        name = "e" * 40 + str(i)
+        state.entries[f"/r/{name}"] = FileEntry(f"/r/{name}", name, False, 0, "/r", 1)
+    index = FileIndex()
+    index.install(IndexSettings(roots=("/r",)), state)
+    start = time.perf_counter()
+    assert index.search("eeeeeeeeex", 10) == []  # took minutes with the old pattern
+    assert len(index.search("eeeeeeee1", 10)) == 10
+    assert time.perf_counter() - start < 0.5
