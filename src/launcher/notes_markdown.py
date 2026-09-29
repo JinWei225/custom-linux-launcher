@@ -40,8 +40,11 @@ _TASK_SHORTHAND = re.compile(r"^([ \t]*)(?:[-*+][ \t]+)?\[ ?\][ \t]")
 # "a) ", "a. ", "i) ", "i. " typed at the start of an indented line: a lettered or roman
 # sub-list, which the file keeps as "1." (the level decides how it is shown).
 _SUBLIST_SHORTHAND = re.compile(r"^([ \t]+)[ai][.)][ \t]")
-# Another list marker typed on an empty item switches its type: "1. - " -> "- ".
-_RETYPE = re.compile(r"^([ \t]*)(?:\d{1,9}[.)]|[-*+])[ \t]+(\d{1,9}[.)]|[ai][.)]|[-*+])[ \t]$")
+# Another list marker typed on an empty item switches its type: "1. - " -> "- ". Only
+# "1." starts a numbered list, so "- 2024. was a good year" stays a bullet.
+_RETYPE = re.compile(r"^([ \t]*)(\d{1,9}[.)]|[-*+])[ \t]+(1[.)]|[ai][.)]|[-*+])[ \t]$")
+# The letter a sub-list shorthand ends with: "\ta) " -> "a", "- i. " -> "i".
+_LETTER_MARKER = re.compile(r"(?:^|[ \t])([ai])[.)][ \t]$")
 
 LIST_KINDS = ("bullet", "task", "ordered")
 _DESTINATION = r"(<[^<>\n]*>|[^\s()<>]+)"  # a link target: plain, or <with spaces>
@@ -206,9 +209,9 @@ def retype_shorthand(line: str) -> tuple[int, str] | None:
     """ "2. - " -> (length, "- "); "- 1. " -> (length, "1. "): an empty item whose
     marker was just typed again as another kind of list (Notion does the same)."""
     m = _RETYPE.match(line)
-    if m is None:
-        return None
-    marker = m.group(2)
+    if m is None or m.group(3) == m.group(2):
+        return None  # "- - " is not a new marker but the start of a rule ("- - -")
+    marker = m.group(3)
     new = f"{marker[0]} " if marker[0] in "-*+" else "1. "
     return m.end(), m.group(1) + new
 
@@ -219,6 +222,27 @@ def sublist_shorthand(line: str) -> tuple[int, str] | None:
     if m is None or _ORDERED.match(line) or _BULLET.match(line):
         return None
     return m.end(), f"{m.group(1)}1. "
+
+
+def shorthand(lines: list[str], infos: list[LineInfo], n: int) -> tuple[int, str] | None:
+    """The shorthand just typed at the start of line n, as (length replaced, new start),
+    or None. Never inside code. "a) " / "i. " only count where the numbered item they
+    become is shown that way (a) one list in, i. two in); elsewhere, as in "- a) first
+    option", the text stays as typed."""
+    if infos[n].kind in ("code", "fence"):
+        return None
+    line = lines[n]
+    found = retype_shorthand(line) or task_shorthand(line) or sublist_shorthand(line)
+    if found is None:
+        return None
+    letter = _LETTER_MARKER.search(line[: found[0]])
+    if letter is not None:
+        length, new = found
+        candidate = [*lines[:n], new + line[length:]]
+        level = ordered_levels(classify(candidate))[n]
+        if level % 3 != (1 if letter.group(1) == "a" else 2):
+            return None
+    return found
 
 
 def ordered_levels(infos: list[LineInfo]) -> list[int]:

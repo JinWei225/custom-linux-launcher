@@ -254,6 +254,19 @@ def main() -> int:
     t.type("- bullet\n\t1. numbered")
     check("a numbered list inside a bullet starts at 1.", labels() == {1: "1."}, repr(labels()))
 
+    # Shorthands leave rules, prose after a bullet, and code alone.
+    t.clear()
+    t.type("- - -")
+    check("'- - -' can be typed (a rule)", t.text() == "- - -", repr(t.text()))
+    t.clear()
+    t.type("- a) first option")
+    check("'- a) first option' stays a bullet with its text",
+          t.text() == "- a) first option", repr(t.text()))  # fmt: skip
+    t.clear()
+    t.type("```yaml\n  - * x\n\ta) y")
+    check("shorthands don't rewrite code", t.text() == "```yaml\n  - * x\n\ta) y\n```",
+          repr(t.text()))  # fmt: skip
+
     # A long numbered item wraps under its text, not under the number.
     t.clear()
     t.type("1. " + "wrapping words " * 30)

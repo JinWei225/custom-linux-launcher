@@ -493,11 +493,13 @@ class MarkdownEditor(Gtk.TextView):
     def _apply_shorthand(self) -> None:
         """ "[] " just typed at a line start becomes "- [ ] "; "a) " or "i. " on an
         indented line becomes a numbered sub-list ("1.", shown as a) or i.); "- " typed
-        on an empty numbered item makes it a bullet, and "1. " the other way round."""
+        on an empty numbered item makes it a bullet, and "1. " the other way round.
+        Nothing is rewritten inside code blocks."""
         cursor = self._cursor()
         line, col = cursor.get_line(), cursor.get_line_offset()
-        text = self.line_text(line)
-        found = md.retype_shorthand(text) or md.task_shorthand(text) or md.sublist_shorthand(text)
+        if line >= len(self._infos) or len(self._lines) != len(self._infos):
+            return
+        found = md.shorthand(self._lines, self._infos, line)
         if found is None or col != found[0]:
             return
         length, replacement = found

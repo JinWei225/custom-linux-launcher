@@ -437,10 +437,14 @@ def test_step_out_joins_the_list_above():
         ("2. - ", (5, "- ")),
         ("\t1. * ", (6, "\t* ")),
         ("- 1. ", (5, "1. ")),
-        ("\t- 3) ", (6, "\t1. ")),
+        ("\t- 1) ", (6, "\t1. ")),
+        ("- 3) ", None),  # only "1." starts a list: "- 2024. was a good year" stays
+        ("- 2024. ", None),
         ("2. - x", None),  # only right after the marker is typed on an empty item
         ("2. -", None),
-        ("- - ", (4, "- ")),
+        ("- - ", None),  # the same marker again is a rule being typed: "- - -"
+        ("* * ", None),
+        ("- * ", (4, "* ")),
         ("\t1. a) ", (7, "\t1. ")),  # already numbered (shown as a)): stays numbered
         ("\t- i. ", (6, "\t1. ")),
     ],
@@ -449,3 +453,33 @@ def test_retype_shorthand(line, expected):
     from launcher.notes_markdown import retype_shorthand
 
     assert retype_shorthand(line) == expected
+
+
+def _shorthand(lines):
+    from launcher.notes_markdown import shorthand
+
+    return shorthand(lines, classify(lines), len(lines) - 1)
+
+
+@pytest.mark.parametrize(
+    "lines, expected",
+    [
+        (["[] "], (3, "- [ ] ")),
+        (["1. top", "\ta) "], (4, "\t1. ")),  # a) one list in: shown as a)
+        (["1. top", "\t1. a", "\t\ti. "], (5, "\t\t1. ")),  # i. two lists in
+        (["1. top", "\t- a) "], (6, "\t1. ")),
+        (["1. top", "\t- "], None),
+        (["- a) first option"], None),  # prose after a bullet stays as typed
+        (["- a) "], None),
+        (["- i. note"], None),
+        (["- item", "\ta) "], None),  # under a bullet it would show 1., not a)
+        (["1. top", "\ti. "], None),  # one list in it would show a), not i.
+        (["    a. "], None),  # no list around it at all
+        (["```yaml", "  - - "], None),  # never inside code
+        (["```", "\ta) "], None),
+        (["```", "[] "], None),
+        (["```", "x", "```", "\t- 1. "], (6, "\t1. ")),  # after the block: as usual
+    ],
+)
+def test_shorthand_in_context(lines, expected):
+    assert _shorthand(lines) == expected
