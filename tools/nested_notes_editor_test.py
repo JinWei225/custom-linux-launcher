@@ -218,10 +218,10 @@ def main() -> int:
 
     t.clear()
     t.type("1. first\n\tsub one\nsub two\n\tdeeper\n\n\nsecond")
-    expected = "1. first\n\t1. sub one\n\t2. sub two\n\t\t1. deeper\n2. second"
+    expected = "1. first\n\ta) sub one\n\tb) sub two\n\t\ti. deeper\n2. second"
     check("Tab starts a sub-list; Enter twice steps back out", t.text() == expected,
           repr(t.text()))  # fmt: skip
-    check("levels show as 1. / a) / i.",
+    check("levels are written and shown as 1. / a) / i.",
           labels() == {0: "1.", 1: "a)", 2: "b)", 3: "i.", 4: "2."}, repr(labels()))  # fmt: skip
     check("the number is hidden text, drawn in the margin",
           "md-hidden" in t.tags(1, 2) and "md-hidden" not in t.tags(1, 4))  # fmt: skip
@@ -279,17 +279,38 @@ def main() -> int:
     t.type("1. a\nb\nc")
     t.go(1, 4)
     t.key(Gdk.KEY_Tab)
-    check("Tab on an item renumbers the rest", t.text() == "1. a\n\t1. b\n2. c", repr(t.text()))
+    check("Tab on an item renumbers the rest", t.text() == "1. a\n\ta) b\n2. c", repr(t.text()))
+    t.key(Gdk.KEY_ISO_Left_Tab, SHIFT)
+    check("Shift+Tab makes it a number again", t.text() == "1. a\n2. b\n3. c", repr(t.text()))
     t.clear()
     t.type("1. top\n\ta) typed")
-    check("typing a) on the new sub-item keeps it numbered",
-          t.text() == "1. top\n\t1. typed" and labels().get(1) == "a)", repr(t.text()))  # fmt: skip
+    check("typing a) on the new sub-item keeps it lettered",
+          t.text() == "1. top\n\ta) typed" and labels().get(1) == "a)", repr(t.text()))  # fmt: skip
     t.clear()
     t.type("1. top\n")
     t.key(Gdk.KEY_BackSpace)  # a plain line under the list
     t.type("\ta) typed")
     check("typing a) on an indented line starts a sub-list",
-          t.text() == "1. top\n\t1. typed" and labels().get(1) == "a)", repr(t.text()))  # fmt: skip
+          t.text() == "1. top\n\ta) typed" and labels().get(1) == "a)", repr(t.text()))  # fmt: skip
+
+    # A sub-item's number is edited as it is shown: "b)", not "2.".
+    t.clear()
+    t.type("1. top\n\tfirst\nsecond")
+    t.go(2, 4)
+    t.key(Gdk.KEY_Left)
+    shown = window.buffer.get_text(*(window.buffer.get_iter_at_line_offset(2, c)[1]
+                                     for c in (1, 3)), True)  # fmt: skip
+    check("an opened sub-item number reads as drawn", shown == "b)" and 2 not in labels(),
+          repr(shown))  # fmt: skip
+    window.buffer.begin_user_action()
+    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(1, c)[1] for c in (1, 2)))
+    window.buffer.insert(window.buffer.get_iter_at_line_offset(1, 1)[1], "c")
+    window.buffer.end_user_action()
+    pump(0.05)
+    t.go(0, 3)
+    check("changing a) to c) renumbers the sub-list in letters",
+          t.text() == "1. top\n\tc) first\n\td) second" and labels().get(2) == "d)",
+          f"{t.text()!r} {labels()}")  # fmt: skip
 
     # Mixed: a bullet under a numbered item, then back to the next number.
     t.clear()

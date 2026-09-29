@@ -19,7 +19,7 @@ NOTE = (
     "# Lecture 3: Fourier Series\n\n"
     "Periodic signals as **sums** of *sinusoids*.\n\n"
     "## Key ideas\n- Orthogonality\n\t- sin and cos\n1. Find the period\n10. Compute aₙ\n"
-    "\t1. nested step\n\t\t1. deeper step\n"
+    "\ta) nested step\n\t\ti. deeper step\n"
     "- [x] Read chapter 3\n- [ ] Problem set 2\n\n"
     "> Any periodic function\n\n"
     "See [the lecture page](https://example.edu/signals), https://gnome.org and "
@@ -174,6 +174,16 @@ def test_list_numbers_are_regular_weight_like_the_editor(tmp_path, monkeypatch):
         return original(self, text, *args, **kwargs)
 
     monkeypatch.setattr(pdf._Writer, "layout", spy)
-    export_pdf("1. one\n\t1. sub\n\t\t1. deep\n", tmp_path / "n.pdf", title="n")
+    export_pdf("1. one\n\ta) sub\n\t\ti. deep\n", tmp_path / "n.pdf", title="n")
     labels = [(text, bold) for text, bold in calls if text in ("1.", "a)", "i.")]
     assert labels == [("1.", False), ("a)", False), ("i.", False)]
+
+
+@needs_poppler
+def test_list_numbers_print_as_written(tmp_path):
+    out = tmp_path / "numbers.pdf"
+    export_pdf("1. top\n\tb) lettered\n\t\tiv. roman\n2. next\n\t1. older note\n", out,
+               title="n")  # fmt: skip
+    text = pdf_text(out)
+    for shown in ("1. top", "b) lettered", "iv. roman", "2. next", "1. older note"):
+        assert shown in text, shown

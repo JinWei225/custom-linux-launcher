@@ -356,10 +356,12 @@ def test_styled_text():
 # --- numbered sub-lists ----------------------------------------------------------------
 
 from launcher.notes_markdown import (  # noqa: E402
+    format_number,
     list_label,
+    marker_text,
     ordered_levels,
+    reindent,
     step_out,
-    sublist_shorthand,
 )
 
 
@@ -380,23 +382,83 @@ from launcher.notes_markdown import (  # noqa: E402
         (3999, 2, ".", "mmmcmxcix."),
         (4000, 2, ".", "4000."),  # past roman numerals: digits, not thousands of m's
         (555123456, 2, ".", "555123456."),
-        (0, 1, ".", "0)"),  # a list started at 0: not a second "a)"
-        (0, 2, ".", "0."),
+        (0, 1, ".", "0)"),
         (702, 1, ".", "zz)"),
     ],
 )
-def test_list_label(number, level, delim, label):
+def test_list_label_is_a_new_items_marker_at_its_level(number, level, delim, label):
     assert list_label(number, level, delim) == label
+
+
+def test_letters_and_roman_numerals_read_back():
+    from launcher.notes_markdown import _letters_value, _roman_value
+
+    for n in range(1, 4000):
+        assert _roman_value(format_number(n, "i")) == n
+        assert _letters_value(format_number(n, "a")) == n
+    for token in ("iiii", "vx", "mmmm", "dim", "ic", "abc"):
+        assert _roman_value(token) is None
+
+
+def _items(lines):
+    return [
+        (i.kind, i.number, i.style, i.depth) if i.kind == "ordered" else i.kind
+        for i in classify(lines)
+    ]
+
+
+@pytest.mark.parametrize(
+    "lines, expected",
+    [
+        # As the file says: 1. at the top, a) one numbered list in, i. two in, then 1.
+        (["1. top", "\ta) sub", "\t\ti. deeper", "\t\t\t1. again"],
+         [("ordered", 1, "1", 0), ("ordered", 1, "a", 1), ("ordered", 1, "i", 2),
+          ("ordered", 1, "1", 3)]),
+        (["1. top", "\tc. third", "\ti) ninth"],
+         [("ordered", 1, "1", 0), ("ordered", 3, "a", 1), ("ordered", 9, "a", 1)]),
+        (["1. top", "\ta) x", "\t\tiv. four", "\t\tvs. prose"],
+         [("ordered", 1, "1", 0), ("ordered", 1, "a", 1), ("ordered", 4, "i", 2), "text"]),
+        # Where letters don't belong they are text, as prose.
+        (["a) first point"], ["text"]),
+        (["- item", "\ta) under a bullet"], ["bullet", "text"]),
+        (["    a. alone"], ["text"]),
+        (["1. top", "\ta)"], [("ordered", 1, "1", 0), "text"]),  # not until the space
+        (["1. top", "\tvs. that"], [("ordered", 1, "1", 0), "text"]),  # two letters: no
+        (["1. top", "\ti. roman one in"], [("ordered", 1, "1", 0), ("ordered", 9, "a", 1)]),
+        # Longer markers continue their list: z) aa), xxxix. xl.
+        (["1. x", "\tz) y", "\taa) z", "\taa) inserted"],
+         [("ordered", 1, "1", 0), ("ordered", 26, "a", 1), ("ordered", 27, "a", 1),
+          ("ordered", 27, "a", 1)]),
+        (["1. x", "\ta) y", "\t\txxxix. z", "\t\txl. w"],
+         [("ordered", 1, "1", 0), ("ordered", 1, "a", 1), ("ordered", 39, "i", 2),
+          ("ordered", 40, "i", 2)]),
+        (["1. x", "\ta) y", "\t\txl. alone"], [("ordered", 1, "1", 0), ("ordered", 1, "a", 1),
+                                              "text"]),
+        # Digits count everywhere: notes written with "\t1." sub-items keep them.
+        (["1. top", "\t1. sub"], [("ordered", 1, "1", 0), ("ordered", 1, "1", 1)]),
+        # A bullet in between doesn't count as a numbered list.
+        (["1. top", "\t- bullet", "\t\ta) lettered"],
+         [("ordered", 1, "1", 0), "bullet", ("ordered", 1, "a", 2)]),
+    ],
+)  # fmt: skip
+def test_lettered_and_roman_items_where_they_belong(lines, expected):
+    assert _items(lines) == expected
+
+
+def test_marker_text_is_what_is_drawn():
+    for line, text in (("\tb) x", "b)"), ("\t\tiv. y", "iv."), ("12) z", "12)")):
+        lines = ["1. top", "\ta) x", line] if line.startswith("\t\t") else ["1. top", line]
+        assert marker_text(line, classify(lines)[-1]) == text
 
 
 def test_ordered_levels_count_numbered_lists_only():
     lines = [
         "1. top",  # 0
-        "\t1. sub",  # 1
-        "\t\t1. subsub",  # 2
-        "\t\t\t1. again",  # 3 -> shown as 1. again
+        "\ta) sub",  # 1
+        "\t\ti. subsub",  # 2
+        "\t\t\t1. again",  # 3
         "\t- bullet",  # bullets don't count
-        "\t\t1. under it",  # 1: inside one numbered list
+        "\t\ta) under it",  # 1: inside one numbered list
         "",  # blank lines don't end a list
         "2. top",  # 0
         "text",  # a paragraph ends it
@@ -404,24 +466,48 @@ def test_ordered_levels_count_numbered_lists_only():
     ]
     levels = ordered_levels(classify(lines))
     assert [levels[i] for i in (0, 1, 2, 3, 5, 7, 9)] == [0, 1, 2, 3, 1, 0, 0]
-    labels = [list_label(1, levels[i]) for i in (0, 1, 2, 3)]
-    assert labels == ["1.", "a)", "i.", "1."]
+
+
+def test_enter_continues_an_items_own_style():
+    from launcher.notes_markdown import continuation
+
+    for lines, expected in (
+        (["1. top", "\tb) x"], "\tc) "),
+        (["1. top", "\ta) x", "\t\tiii. y"], "\t\tiv. "),
+        (["1. top", "\t1. old style"], "\t2. "),
+        (["1. top", "\tz) x"], "\taa) "),
+    ):
+        infos = classify(lines)
+        assert continuation(lines[-1], infos[-1]) == expected
 
 
 @pytest.mark.parametrize(
-    "line, expected",
+    "lines, n, deeper, expected",
     [
-        ("\ta) ", (4, "\t1. ")),
-        ("\ti. x", (4, "\t1. ")),
-        ("    a. ", (7, "    1. ")),
-        ("a) ", None),  # not indented: prose like "a) first point" stays text
-        ("\ta)", None),  # not until the space
-        ("\tb) ", None),
-        ("\t1. x", None),
+        (["1. a", "2. b"], 1, True, "\ta) b"),
+        (["1. a", "2) b"], 1, True, "\ta) b"),
+        (["1. a", "\ta) s", "\tb) t"], 2, True, "\t\ti. t"),
+        (["1. a", "\ta) s", "\tb) t"], 2, False, "1. t"),  # renumbering makes it 2.
+        (["1. a", "\t3) b"], 1, False, "1) b"),  # still digits: keeps its ")"
+        (["1. a", "\ta) s"], 1, True, "\t\ta) s"),  # still one list in: stays a)
+        (["1. a", "\ta)  two spaces"], 1, False, "1.  two spaces"),
+        (["- a", "\t- b"], 1, False, "- b"),
+        (["- a", "- b"], 1, True, "\t- b"),
     ],
 )
-def test_sublist_shorthand(line, expected):
-    assert sublist_shorthand(line) == expected
+def test_reindent_gives_a_numbered_item_its_new_levels_marker(lines, n, deeper, expected):
+    from launcher.notes_markdown import indent, outdent
+
+    assert reindent(lines, n, indent if deeper else outdent) == expected
+
+
+def test_renumber_keeps_each_items_style():
+    lines = ["1. x", "\ta) one", "\ta) two", "\t\ti. deep", "\t\ti. deeper", "\tx) three",
+             "2. y"]  # fmt: skip
+    edits = renumber(lines, classify(lines))
+    assert edits == [(2, 1, 2, "b"), (4, 2, 3, "ii"), (5, 1, 2, "c")]
+    letters = ["1. x"] + [f"\t{chr(ord('a') + i)}) item" for i in range(26)] + ["\ta) more"]
+    assert renumber(letters, classify(letters)) == [(27, 1, 2, "aa")]
 
 
 def test_step_out_joins_the_list_above():
@@ -429,6 +515,8 @@ def test_step_out_joins_the_list_above():
     assert step_out(lines, classify(lines), 2) == "2. "
     lines = ["3) first", "\t1. sub", "\t\t- deep", "\t\t- "]
     assert step_out(lines, classify(lines), 3) == "\t2. "
+    lines = ["1. first", "\ta) sub", "\t\t- deep", "\t\t- "]
+    assert step_out(lines, classify(lines), 3) == "\tb) "
     lines = ["- [x] task", "", "\t1. sub", "\t2. "]
     assert step_out(lines, classify(lines), 3) == "- [ ] "
     lines = ["- a", "\t\t- "]  # one level in, however far it is indented
@@ -443,7 +531,7 @@ def test_step_out_joins_the_list_above():
         ("2. - ", (5, "- ")),
         ("\t1. * ", (6, "\t* ")),
         ("- 1. ", (5, "1. ")),
-        ("\t- 1) ", (6, "\t1. ")),
+        ("\t- 1) ", (6, "\t1) ")),  # kept as typed
         ("- 3) ", None),  # only "1." starts a list: "- 2024. was a good year" stays
         ("- 2024. ", None),
         ("2. - x", None),  # only right after the marker is typed on an empty item
@@ -451,8 +539,10 @@ def test_step_out_joins_the_list_above():
         ("- - ", None),  # the same marker again is a rule being typed: "- - -"
         ("* * ", None),
         ("- * ", (4, "* ")),
-        ("\t1. a) ", (7, "\t1. ")),  # already numbered (shown as a)): stays numbered
-        ("\t- i. ", (6, "\t1. ")),
+        ("\t1. a) ", (7, "\ta) ")),
+        ("\ta) a) ", (7, "\ta) ")),  # typed again: once is enough
+        ("\t- i. ", (6, "\ti. ")),
+        ("\tb) - ", (6, "\t- ")),
     ],
 )
 def test_retype_shorthand(line, expected):
@@ -471,32 +561,24 @@ def _shorthand(lines):
     "lines, expected",
     [
         (["[] "], (3, "- [ ] ")),
-        (["1. top", "\ta) "], (4, "\t1. ")),  # a) one list in: shown as a)
-        (["1. top", "\t1. a", "\t\ti. "], (5, "\t\t1. ")),  # i. two lists in
-        (["1. top", "\t- a) "], (6, "\t1. ")),
+        (["1. top", "\t- a) "], (6, "\ta) ")),  # lettered, as typed
+        (["1. top", "\ta) x", "\t\t- i. "], (7, "\t\ti. ")),
+        (["1. top", "\ta) "], None),  # already an item: nothing to rewrite
+        (["1. top", "\tb) - "], (6, "\t- ")),
         (["1. top", "\t- "], None),
         (["- a) first option"], None),  # prose after a bullet stays as typed
         (["- a) "], None),
         (["- i. note"], None),
-        (["- item", "\ta) "], None),  # under a bullet it would show 1., not a)
-        (["1. top", "\ti. "], None),  # one list in it would show a), not i.
-        (["    a. "], None),  # no list around it at all
+        (["- item", "\t- a) "], None),  # under a bullet a) isn't an item
+        (["no. - "], None),  # not a list item to begin with
         (["```yaml", "  - - "], None),  # never inside code
-        (["```", "\ta) "], None),
+        (["```", "\t- a) "], None),
         (["```", "[] "], None),
         (["```", "x", "```", "\t- 1. "], (6, "\t1. ")),  # after the block: as usual
     ],
 )
 def test_shorthand_in_context(lines, expected):
     assert _shorthand(lines) == expected
-
-
-def test_sub_list_from_zero_has_distinct_labels():
-    lines = ["1. x", "\t0. first", "\t1. second", "\t\t0. deep", "\t\t1. deeper"]
-    infos = classify(lines)
-    levels = ordered_levels(infos)
-    labels = [list_label(infos[i].number, levels[i], infos[i].delim) for i in range(1, 5)]
-    assert labels == ["0)", "a)", "0.", "i."]
 
 
 def test_code_block_ranges():

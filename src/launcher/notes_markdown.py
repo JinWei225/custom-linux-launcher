@@ -9,8 +9,14 @@ Kinds and which leading characters are markup:
   heading  "## Title"      marker "## " (shown dim on the cursor's line, hidden elsewhere)
   bullet   "\\t- item"     hidden "\\t- " (a bullet is drawn instead)
   task     "- [ ] item"    hidden "- [ ] " (a checkbox is drawn instead)
-  ordered  "\\t1. item"    hidden "\\t", marker "\\t1. " (the number is drawn: 1. / a) / i. by
-                           level; the editor shows "1. " itself while it is being edited)
+  ordered  "\\t1. item"    hidden "\\t", marker "\\t1. " (the number is drawn in the margin, as
+                           written; the editor shows it as text while it is being edited)
+
+Numbered lists nested in numbered lists are lettered, then roman, as the file says:
+"1. top", "\\ta) one in", "\\t\\ti. two in", then numbers again. Letters and roman numerals
+only count where they belong (a) one list in, i. two in); anywhere else, as in
+"a) first point", they are plain text. Tab / Shift+Tab give an item its new level's
+marker; Enter continues an item's own.
   quote    "> text"        hidden "> " (a bar is drawn instead); needs the space
   rule     "---"           the whole line (a line is drawn instead)
   fence    "```python"     shown dim; lines between two fences are "code"
@@ -25,6 +31,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 ATTACHMENTS = "attachments"  # pictures pasted into a note go in this folder next to it
@@ -37,17 +44,17 @@ _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+")
 _TASK = re.compile(r"^([ \t]*)([-*+])[ \t]+\[([ xX])\](?:[ \t]+|$)")
 _BULLET = re.compile(r"^([ \t]*)([-*+])[ \t]+")
 _ORDERED = re.compile(r"^([ \t]*)(\d{1,9})([.)])[ \t]+")
+# A lettered or roman item ("\tb) ", "\t\tiv. "): which one, and whether it is an item at
+# all, depends on the lists around it (see classify).
+_ALPHA_ORDERED = re.compile(r"^([ \t]+)([a-z]{1,15})([.)])[ \t]+")
 _QUOTE = re.compile(r"^ {0,3}((?:>[ \t]?)+)")
 # "[] ", "[ ] ", "- [] " typed at the start of a line: a checkbox.
 _TASK_SHORTHAND = re.compile(r"^([ \t]*)(?:[-*+][ \t]+)?\[ ?\][ \t]")
-# "a) ", "a. ", "i) ", "i. " typed at the start of an indented line: a lettered or roman
-# sub-list, which the file keeps as "1." (the level decides how it is shown).
-_SUBLIST_SHORTHAND = re.compile(r"^([ \t]+)[ai][.)][ \t]")
 # Another list marker typed on an empty item switches its type: "1. - " -> "- ". Only
-# "1." starts a numbered list, so "- 2024. was a good year" stays a bullet.
-_RETYPE = re.compile(r"^([ \t]*)(\d{1,9}[.)]|[-*+])[ \t]+(1[.)]|[ai][.)]|[-*+])[ \t]$")
-# The letter a sub-list shorthand ends with: "\ta) " -> "a", "- i. " -> "i".
-_LETTER_MARKER = re.compile(r"(?:^|[ \t])([ai])[.)][ \t]$")
+# "1.", "a)" and "i." start a numbered list, so "- 2024. was a good year" stays a bullet.
+_RETYPE = re.compile(
+    r"^([ \t]*)(\d{1,9}[.)]|[a-z]{1,15}[.)]|[-*+])[ \t]+(1[.)]|[ai][.)]|[-*+])[ \t]$"
+)
 
 LIST_KINDS = ("bullet", "task", "ordered")
 _DESTINATION = r"(<[^<>\n]*>|[^\s()<>]+)"  # a link target: plain, or <with spaces>
@@ -63,6 +70,7 @@ class LineInfo:
     marker: int = 0  # leading characters that are markup (heading, ordered number, rule)
     content: int = 0  # column where the text itself starts
     number: int = 0  # ordered lists
+    style: str = ""  # ordered lists: "1" (digits), "a" (letters) or "i" (roman numerals)
     delim: str = ""  # "." or ")" (ordered), "-" "*" "+" (bullet/task)
     checked: bool = False
     indent: str = ""  # the leading whitespace of a list item
@@ -73,7 +81,8 @@ def classify(lines: list[str]) -> list[LineInfo]:
     """What every line is. Needs all lines: code fences and list nesting span lines."""
     infos: list[LineInfo] = []
     fence: str | None = None  # the open fence ("```"), if inside a code block
-    stack: list[int] = []  # indent widths of the enclosing list items
+    # The enclosing list items: (indent width, numbered lists up to it, style, number).
+    stack: list[tuple[int, int, str, int]] = []
     for line in lines:
         if fence is not None:
             m = _FENCE.match(line)
@@ -95,17 +104,50 @@ def classify(lines: list[str]) -> list[LineInfo]:
             info = LineInfo("quote", depth=1, hidden=len(line), content=len(line))
         if info.kind == "fence":
             fence = _FENCE.match(line).group(1)
+        if info.kind == "text":
+            info = _lettered(line, stack) or info
         if info.kind in LIST_KINDS:
             width = _width(info.indent)
-            while stack and width < stack[-1]:
+            while stack and width < stack[-1][0]:
                 stack.pop()
-            if not stack or width > stack[-1]:
-                stack.append(width)
-            info = _at_depth(info, min(len(stack) - 1, MAX_DEPTH))
+            if stack and stack[-1][0] == width:
+                stack.pop()  # the item before, at the same level
+            level = stack[-1][1] if stack else 0
+            info = _at_depth(info, min(len(stack), MAX_DEPTH))
+            stack.append((width, level + (info.kind == "ordered"), info.style, info.number))
         elif info.kind != "blank":
             stack.clear()
         infos.append(info)
     return infos
+
+
+def _lettered(line: str, stack: list[tuple[int, int, str, int]]) -> LineInfo | None:
+    """ "\\tb) text" as an item, if it is one where it stands: letters one numbered list
+    in (then every third level), roman numerals two in. Longer ones ("aa)", "xl.") only
+    count right after an item numbered one less (or the same), so a line like
+    "\\tvs. that" isn't taken for one."""
+    m = _ALPHA_ORDERED.match(line)
+    if m is None:
+        return None
+    width = _width(m.group(1))
+    parents = [entry for entry in stack if entry[0] < width]
+    level = parents[-1][1] if parents else 0
+    before = next(((e[2], e[3]) for e in stack if e[0] == width), ("", 0))
+    token = m.group(2)
+    if level % 3 == 1:
+        style, number, short = "a", _letters_value(token), len(token) == 1
+    elif level % 3 == 2:
+        style, number = "i", _roman_value(token)
+        short = number is not None and number <= 39
+    else:
+        return None
+    # Same as the one before too: Enter just inserted an item there, before renumbering.
+    if number is None or not (short or before in ((style, number - 1), (style, number))):
+        return None
+    return LineInfo(
+        "ordered", hidden=m.end(1), marker=m.end(), content=m.end(), number=number,
+        style=style, delim=m.group(3), indent=m.group(1),
+    )  # fmt: skip
 
 
 @functools.lru_cache(maxsize=256)
@@ -145,7 +187,7 @@ def _classify_line(line: str) -> LineInfo:
     if m := _ORDERED.match(line):
         return LineInfo(
             "ordered", hidden=m.end(1), marker=m.end(), content=m.end(),
-            number=int(m.group(2)), delim=m.group(3), indent=m.group(1),
+            number=int(m.group(2)), style="1", delim=m.group(3), indent=m.group(1),
         )  # fmt: skip
     if m := _QUOTE.match(line):
         prefix = m.group(1)
@@ -166,7 +208,7 @@ def continuation(line: str, info: LineInfo) -> str | None:
     if info.kind == "task":
         return f"{info.indent}{info.delim} [ ] "
     if info.kind == "ordered":
-        return f"{info.indent}{info.number + 1}{info.delim} "
+        return f"{info.indent}{format_number(info.number + 1, info.style)}{info.delim} "
     if info.kind == "quote":
         return "> " * info.depth
     return None
@@ -176,13 +218,22 @@ def indent(line: str) -> str:
     return INDENT + line
 
 
-def indent_item(line: str) -> str:
-    """Tab on a list item. A numbered item starts its sub-list at 1 (shown as "a)");
-    renumbering gives it the next number instead if the sub-list already has items."""
-    m = _ORDERED.match(line)
-    if m is None:
-        return indent(line)
-    return f"{INDENT}{m.group(1)}1{line[m.end(2) :]}"
+def reindent(lines: list[str], n: int, change: Callable[[str], str]) -> str:
+    """Line n after Tab (change=indent) or Shift+Tab (change=outdent). A numbered item
+    takes the first marker of its new level: "2. b" indented under "1. a" becomes
+    "\\ta) b", and back. Renumbering then fits it into a list it joins."""
+    line = lines[n]
+    moved = change(line)
+    info = classify(lines[: n + 1])[n]
+    if info.kind != "ordered" or moved == line:
+        return moved
+    new_indent = moved[: len(moved) - len(moved.lstrip(" \t"))]
+    text = line[info.content :]
+    space = line[len(line[: info.content].rstrip()) : info.content]
+    level = ordered_levels(classify([*lines[:n], f"{new_indent}1. {text}"]))[n]
+    style = LEVEL_STYLES[level % 3]
+    delim = info.delim if style == info.style else DEFAULT_DELIMS[style]
+    return f"{new_indent}{format_number(1, style)}{delim}{space}{text}"
 
 
 def outdent(line: str) -> str:
@@ -217,49 +268,37 @@ def task_shorthand(line: str) -> tuple[int, str] | None:
 
 
 def retype_shorthand(line: str) -> tuple[int, str] | None:
-    """ "2. - " -> (length, "- "); "- 1. " -> (length, "1. "): an empty item whose
-    marker was just typed again as another kind of list (Notion does the same)."""
+    """ "2. - " -> (length, "- "); "- 1. " -> (length, "1. "); "\\t- a) " -> (length,
+    "\\ta) "): an empty item whose marker was just typed again as another kind of list
+    (Notion does the same). The new marker is kept as typed."""
     m = _RETYPE.match(line)
-    if m is None or m.group(3) == m.group(2):
+    if m is None or (m.group(3) == m.group(2) and m.group(2) in "-*+"):
         return None  # "- - " is not a new marker but the start of a rule ("- - -")
-    marker = m.group(3)
-    new = f"{marker[0]} " if marker[0] in "-*+" else "1. "
-    return m.end(), m.group(1) + new
-
-
-def sublist_shorthand(line: str) -> tuple[int, str] | None:
-    """ "\\ta) " typed at a line start -> (length replaced, "\\t1. ")."""
-    m = _SUBLIST_SHORTHAND.match(line)
-    if m is None or _ORDERED.match(line) or _BULLET.match(line):
-        return None
-    return m.end(), f"{m.group(1)}1. "
+    return m.end(), f"{m.group(1)}{m.group(3)} "
 
 
 def shorthand(lines: list[str], infos: list[LineInfo], n: int) -> tuple[int, str] | None:
     """The shorthand just typed at the start of line n, as (length replaced, new start),
-    or None. Never inside code. "a) " / "i. " only count where the numbered item they
-    become is shown that way (a) one list in, i. two in); elsewhere, as in "- a) first
-    option", the text stays as typed."""
+    or None. Never inside code, and only if the result is a list item where it stands:
+    "\\t- a) " under "1." becomes "\\ta) ", but "- a) first option" stays as typed."""
     if infos[n].kind in ("code", "fence"):
         return None
     line = lines[n]
-    found = retype_shorthand(line) or task_shorthand(line) or sublist_shorthand(line)
+    found = None
+    if infos[n].kind in LIST_KINDS:
+        found = retype_shorthand(line)
+    found = found or task_shorthand(line)
     if found is None:
         return None
-    letter = _LETTER_MARKER.search(line[: found[0]])
-    if letter is not None:
-        length, new = found
-        candidate = [*lines[:n], new + line[length:]]
-        level = ordered_levels(classify(candidate))[n]
-        if level % 3 != (1 if letter.group(1) == "a" else 2):
-            return None
-    return found
+    length, new = found
+    candidate = classify([*lines[:n], new + line[length:]])[n]
+    return found if candidate.kind in LIST_KINDS else None
 
 
 def ordered_levels(infos: list[LineInfo]) -> list[int]:
     """How many numbered lists each line is nested in (0 for a top-level "1."): the
-    level picks the label style. Bullets in between don't count, a paragraph ends the
-    lists, blank lines don't."""
+    level picks the marker a new item gets. Bullets in between don't count, a paragraph
+    ends the lists, blank lines don't."""
     levels = []
     # (depth, numbered lists up to and including it) of the list items above
     stack: list[tuple[int, int]] = []
@@ -277,7 +316,10 @@ def ordered_levels(infos: list[LineInfo]) -> list[int]:
     return levels
 
 
-MAX_ROMAN = 3999  # larger numbers (a pasted phone number, say) are shown as digits
+MAX_ROMAN = 3999  # larger numbers (a pasted phone number, say) are written as digits
+LEVEL_STYLES = ("1", "a", "i")  # a new item's style by level: 1. / a) / i., then again
+DEFAULT_DELIMS = {"1": ".", "a": ")", "i": "."}
+_ROMAN_DIGITS = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
 
 
 def _letters(n: int) -> str:
@@ -300,16 +342,47 @@ def _roman(n: int) -> str:
     return out
 
 
+def _letters_value(token: str) -> int:
+    """a -> 1, z -> 26, aa -> 27"""
+    n = 0
+    for ch in token:
+        n = n * 26 + ord(ch) - ord("a") + 1
+    return n
+
+
+def _roman_value(token: str) -> int | None:
+    """iv -> 4; None if it isn't a roman numeral written the usual way ("iiii", "mix"
+    is fine: 1009)."""
+    if any(ch not in _ROMAN_DIGITS for ch in token):
+        return None
+    total = 0
+    for i, ch in enumerate(token):
+        value = _ROMAN_DIGITS[ch]
+        following = _ROMAN_DIGITS[token[i + 1]] if i + 1 < len(token) else 0
+        total += -value if value < following else value
+    return total if 1 <= total <= MAX_ROMAN and _roman(total) == token else None
+
+
+def format_number(number: int, style: str) -> str:
+    """A list number in a style: (3, "a") -> "c", (4, "i") -> "iv". Numbers letters or
+    roman numerals can't write (0, or past MAX_ROMAN) are written as digits."""
+    if style == "a" and number >= 1:
+        return _letters(number)
+    if style == "i" and 1 <= number <= MAX_ROMAN:
+        return _roman(number)
+    return str(number)
+
+
 def list_label(number: int, level: int, delim: str = ".") -> str:
-    """What a numbered item shows: 1. at the top, a) one level in, i. two levels in,
-    then again (like Notion). The file always says "1.". Numbers letters or roman
-    numerals can't show (0, or past MAX_ROMAN) are shown as digits."""
-    style = level % 3
-    if style == 1:
-        return f"{_letters(number) if number >= 1 else number})"
-    if style == 2:
-        return f"{_roman(number) if 1 <= number <= MAX_ROMAN else number}."
-    return f"{number}{delim}"
+    """A new item's marker at this level: 1. at the top, a) one list in, i. two in,
+    then again (like Notion); `delim` is for digits."""
+    style = LEVEL_STYLES[level % 3]
+    return f"{format_number(number, style)}{delim if style == '1' else DEFAULT_DELIMS[style]}"
+
+
+def marker_text(line: str, info: LineInfo) -> str:
+    """A numbered item's marker as written ("b)"), which is what is drawn for it."""
+    return line[info.hidden : info.content].strip()
 
 
 def step_out(lines: list[str], infos: list[LineInfo], n: int) -> str:
@@ -331,7 +404,8 @@ def renumber(lines: list[str], infos: list[LineInfo]) -> list[tuple[int, int, in
     """Edits that number each ordered list 1, 2, 3... from its first item's number.
 
     A list runs over items of the same depth; deeper items and blank lines in between
-    don't break it. Returns (line, start column, end column, new number)."""
+    don't break it. Each item keeps its style (1 / a / i). Returns (line, start column,
+    end column, new number as written)."""
     if len(lines) != len(infos):
         raise ValueError("lines and infos differ in length")
     edits = []
@@ -343,7 +417,8 @@ def renumber(lines: list[str], infos: list[LineInfo]) -> list[tuple[int, int, in
             expected = counters.get(info.depth, info.number)
             if info.number != expected:
                 start = len(info.indent)
-                edits.append((i, start, start + len(str(info.number)), str(expected)))
+                end = len(lines[i][: info.content].rstrip()) - len(info.delim)
+                edits.append((i, start, end, format_number(expected, info.style)))
             counters[info.depth] = expected + 1
         elif info.kind in ("bullet", "task"):
             for depth in [d for d in counters if d >= info.depth]:

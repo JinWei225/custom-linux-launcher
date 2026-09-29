@@ -257,7 +257,6 @@ class _Writer:
     def write(self, text: str) -> None:
         lines = text.split("\n")
         infos = md.classify(lines)
-        self.levels = md.ordered_levels(infos)  # 1. / a) / i. as in the editor
         for n, (line, info) in enumerate(zip(lines, infos, strict=True)):
             draw = getattr(self, f"_{info.kind}", self._text)
             draw(line, info, lines, infos, n)
@@ -322,7 +321,7 @@ class _Writer:
     def _ordered(self, line, info, lines, infos, n) -> None:
         x = self.left + INDENT * (info.depth + 1)
         layout, shown, styles = self._item_layout(line, info, x)
-        number = md.list_label(info.number, self.levels[n], info.delim)
+        number = md.marker_text(line, info)  # as written, as in the editor
 
         def draw_number(first, _top, baseline, _height) -> None:
             if first:

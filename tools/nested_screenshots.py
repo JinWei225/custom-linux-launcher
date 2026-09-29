@@ -94,9 +94,9 @@ Periodic signals as sums of sinusoids.
 ## Steps
 1. Find the period *T*
 2. LONG_STEP
-	1. a₀, the average value
-	2. aₙ and bₙ
-		1. use symmetry to skip one
+	a) a₀, the average value
+	b) aₙ and bₙ
+		i. use symmetry to skip one
 	- tip: sketch the signal first
 3. Write out the series
 

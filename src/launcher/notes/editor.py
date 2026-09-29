@@ -6,9 +6,9 @@ The buffer always holds the plain markdown. After every change each line is clas
 - headings get a bigger font; their "## " is dimmed on the cursor's line, hidden elsewhere
 - list, checkbox and quote markers are always hidden; a bullet, checkbox, bar or list
   number is drawn in their place (snapshot_layer), and the lines are indented with tag
-  margins. A list number can still be edited: Left at the start of the item's text (or a
-  click on the number) opens it, shown as its "1. "; Enter or going back to the text
-  closes it
+  margins. A list number is drawn as written (1. / b) / iv.) and can still be edited:
+  Left at the start of the item's text (or a click on the number) shows it as text;
+  Enter or going back to the text hides it again
 - "---" is drawn as a line (its text shows on the cursor's line); code blocks get a
   monospace font on a rounded background
 
@@ -114,7 +114,6 @@ class MarkdownEditor(Gtk.TextView):
         self._numbers: dict[int, tuple[str, float, float]] = {}  # line -> label, right x, baseline
         self._number_boxes: dict[int, Graphene.Rect] = {}  # line -> drawn number (buffer coords)
         self._number_line: int | None = None  # the numbered item whose "1. " is being edited
-        self._levels: list[int] = []  # per line: numbered lists it is nested in (1. / a) / i.)
         self._blocks: list[tuple[int, int]] = []  # fenced code blocks: (first, last) line
         # Set by the window for the open note: where its pictures are, what to call new
         # ones, and what to do with Ctrl+clicked links and errors.
@@ -272,7 +271,7 @@ class MarkdownEditor(Gtk.TextView):
     def load_text(self, text: str) -> None:
         """Show a note's text as it is (no renumbering, no rewrites), not undoable."""
         self._loading = True
-        self._lines, self._infos, self._levels, self._blocks = [], [], [], []
+        self._lines, self._infos, self._blocks = [], [], []
         self.buffer.begin_irreversible_action()
         self.buffer.set_text(text)
         self.buffer.end_irreversible_action()
@@ -362,7 +361,6 @@ class MarkdownEditor(Gtk.TextView):
             end_new -= 1
             end_old -= 1
         self._lines, self._infos = lines, infos
-        self._levels = md.ordered_levels(infos)
         self._blocks = md.code_blocks(infos)
         self._cursor_line = self._cursor().get_line()
         if end_new >= start:
@@ -545,10 +543,9 @@ class MarkdownEditor(Gtk.TextView):
             self.buffer.place_cursor(it)
 
     def _apply_shorthand(self) -> None:
-        """ "[] " just typed at a line start becomes "- [ ] "; "a) " or "i. " on an
-        indented line becomes a numbered sub-list ("1.", shown as a) or i.); "- " typed
-        on an empty numbered item makes it a bullet, and "1. " the other way round.
-        Nothing is rewritten inside code blocks."""
+        """ "[] " just typed at a line start becomes "- [ ] "; "- " typed on an empty
+        numbered item makes it a bullet, and "1. " (or "a) " / "i. " where a sub-list goes)
+        the other way round. Nothing is rewritten inside code blocks."""
         cursor = self._cursor()
         line, col = cursor.get_line(), cursor.get_line_offset()
         if line >= len(self._infos) or len(self._lines) != len(self._infos):
@@ -622,7 +619,7 @@ class MarkdownEditor(Gtk.TextView):
         if keyval in _ENTER and not mods:
             return self._enter()
         if keyval == Gdk.KEY_Tab and not mods:
-            return self._indent_lines(md.indent_item)
+            return self._indent_lines(md.indent)
         if keyval == Gdk.KEY_ISO_Left_Tab or (keyval == Gdk.KEY_Tab and shift):
             self._indent_lines(md.outdent)
             return True  # never move focus out of the editor
@@ -689,9 +686,10 @@ class MarkdownEditor(Gtk.TextView):
             return False  # Tab elsewhere inserts a tab as usual
 
         def edit() -> None:
+            text = list(self._lines)  # as edited so far: each line's new level depends on it
             for n in lines:
-                old = self.line_text(n)
-                new = change(old)
+                old = text[n]
+                new = text[n] = md.reindent(text, n, change)  # a numbered item's marker too
                 if new != old:
                     cursor = self._cursor()
                     col = cursor.get_line_offset() if cursor.get_line() == n else None
@@ -734,7 +732,7 @@ class MarkdownEditor(Gtk.TextView):
         if info.kind not in (*md.LIST_KINDS, "quote", "heading") or col != info.content:
             return False
         if info.kind in md.LIST_KINDS and info.indent:
-            new = md.outdent(text)
+            new = md.reindent(self._lines, line, md.outdent)
             self._user_edit(lambda: self._set_line(line, new, col - (len(text) - len(new))))
         else:
             new = md.without_marker(text, info)
@@ -978,8 +976,7 @@ class MarkdownEditor(Gtk.TextView):
                 self._bullets[line] = baseline
                 self._glyph_on_baseline(snapshot, glyph, self._slot_x(info.depth), baseline, fg)
             elif info.kind == "ordered" and line != self._number_line:  # else "1. " shows
-                level = self._levels[line] if line < len(self._levels) else 0
-                label = md.list_label(info.number, level, info.delim)
+                label = md.marker_text(self._lines[line], info)  # as written: 1. / b) / iv.
                 baseline = y + self._baseline(line, info)
                 right = self._margin + (info.depth + 1) * LIST_STEP - NUMBER_GAP
                 self._numbers[line] = (label, right, baseline)
