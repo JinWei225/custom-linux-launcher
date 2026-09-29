@@ -71,6 +71,7 @@ def exported(tmp_path):
 @needs_poppler
 def test_text_reads_like_the_note(exported):
     out, pages = exported
+    assert pages == 2  # the sample fills one page and a bit; more means a layout change
     assert re.search(rf"Pages:\s+{pages}\b", pdf_info(out))
     text = pdf_text(out)
     for shown in (
@@ -160,3 +161,19 @@ def test_missing_cairo_support_is_explained(monkeypatch):
     monkeypatch.setattr("gi.require_foreign", no_cairo)
     assert missing_support() == MISSING_SUPPORT
     assert "sudo apt install python3-gi-cairo" in MISSING_SUPPORT
+
+
+def test_list_numbers_are_regular_weight_like_the_editor(tmp_path, monkeypatch):
+    from launcher.notes import pdf
+
+    calls = []
+    original = pdf._Writer.layout
+
+    def spy(self, text, *args, **kwargs):
+        calls.append((text, kwargs.get("bold", False)))
+        return original(self, text, *args, **kwargs)
+
+    monkeypatch.setattr(pdf._Writer, "layout", spy)
+    export_pdf("1. one\n\t1. sub\n\t\t1. deep\n", tmp_path / "n.pdf", title="n")
+    labels = [(text, bold) for text, bold in calls if text in ("1.", "a)", "i.")]
+    assert labels == [("1.", False), ("a)", False), ("i.", False)]

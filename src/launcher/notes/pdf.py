@@ -326,7 +326,7 @@ class _Writer:
 
         def draw_number(first, _top, baseline, _height) -> None:
             if first:
-                label = self.layout(number, bold=True)
+                label = self.layout(number)  # regular weight, as in the editor
                 _ink, logical = label.get_pixel_extents()
                 ascent = label.get_baseline() / Pango.SCALE
                 self.cr.move_to(x - 5 - logical.width, baseline - ascent)
