@@ -264,33 +264,38 @@ def ordered_levels(infos: list[LineInfo]) -> list[int]:
     return levels
 
 
+MAX_ROMAN = 3999  # larger numbers (a pasted phone number, say) are shown as digits
+
+
 def _letters(n: int) -> str:
-    """1 -> a, 26 -> z, 27 -> aa"""
+    """1 -> a, 26 -> z, 27 -> aa (n >= 1)"""
     out = ""
     while n > 0:
         n, rest = divmod(n - 1, 26)
         out = chr(ord("a") + rest) + out
-    return out or "a"
+    return out
 
 
 def _roman(n: int) -> str:
+    """1 -> i, 14 -> xiv (1 <= n <= MAX_ROMAN)"""
     out = ""
     for value, digits in ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"),
                           (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"),
                           (4, "iv"), (1, "i")):  # fmt: skip
         count, n = divmod(n, value)
         out += digits * count
-    return out or "i"
+    return out
 
 
 def list_label(number: int, level: int, delim: str = ".") -> str:
     """What a numbered item shows: 1. at the top, a) one level in, i. two levels in,
-    then again (like Notion). The file always says "1."."""
+    then again (like Notion). The file always says "1.". Numbers letters or roman
+    numerals can't show (0, or past MAX_ROMAN) are shown as digits."""
     style = level % 3
     if style == 1:
-        return f"{_letters(number)})"
+        return f"{_letters(number) if number >= 1 else number})"
     if style == 2:
-        return f"{_roman(number)}."
+        return f"{_roman(number) if 1 <= number <= MAX_ROMAN else number}."
     return f"{number}{delim}"
 
 

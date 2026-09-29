@@ -377,6 +377,12 @@ from launcher.notes_markdown import (  # noqa: E402
         (9, 2, ".", "ix."),
         (14, 2, ".", "xiv."),
         (2, 3, ".", "2."),  # then again
+        (3999, 2, ".", "mmmcmxcix."),
+        (4000, 2, ".", "4000."),  # past roman numerals: digits, not thousands of m's
+        (555123456, 2, ".", "555123456."),
+        (0, 1, ".", "0)"),  # a list started at 0: not a second "a)"
+        (0, 2, ".", "0."),
+        (702, 1, ".", "zz)"),
     ],
 )
 def test_list_label(number, level, delim, label):
@@ -483,3 +489,11 @@ def _shorthand(lines):
 )
 def test_shorthand_in_context(lines, expected):
     assert _shorthand(lines) == expected
+
+
+def test_sub_list_from_zero_has_distinct_labels():
+    lines = ["1. x", "\t0. first", "\t1. second", "\t\t0. deep", "\t\t1. deeper"]
+    infos = classify(lines)
+    levels = ordered_levels(infos)
+    labels = [list_label(infos[i].number, levels[i], infos[i].delim) for i in range(1, 5)]
+    assert labels == ["0)", "a)", "0.", "i."]
