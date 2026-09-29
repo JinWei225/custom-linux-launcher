@@ -39,6 +39,10 @@ PLACEHOLDERS = {
 PREVIEW_MODES = {"clipboard", "snippets"}
 PREVIEW_WIDTH = 380
 LIST_LIMIT_PREVIEW_MODES = 200
+# Building 200 rows on every keystroke is slow: the first ones (a screenful) are built at
+# once, the rest in batches while GTK is idle.
+FIRST_ROWS = 30
+ROWS_PER_BATCH = 40
 FOOTERS = {
     "clipboard": "Enter paste · Alt+Enter copy only · Ctrl+Shift+P pin · Ctrl+Del delete",
     "snippets": "Enter paste · Alt+Enter copy only · Ctrl+E edit",
@@ -228,6 +232,9 @@ class LauncherWindow(Adw.ApplicationWindow):
         self._surface: Gdk.Surface | None = None
         self._window_focused = False
         self._hide_source = 0
+        self._fill_source = 0
+        self._unbuilt: list[Result] = []  # results whose rows are still to be built
+        self._built = 0  # rows in the list
         self.connect("realize", self._on_realize)
 
         self.apply_config(config)
@@ -266,15 +273,18 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.set_visible(False)
 
     def refresh_if_visible(self) -> None:
-        """Re-render results (e.g. a website icon arrived) without moving the selection."""
+        """Re-render results (a website icon arrived, something new was copied) keeping
+        the same entry selected, and the list where it was scrolled to."""
         if not self.get_visible():
             return
         row = self._list.get_selected_row()
+        selected = row.result.id if row is not None else None
         index = row.get_index() if row is not None else 0
-        self._refresh()
-        target = self._list.get_row_at_index(index)
+        results = self._refresh(complete=True, keep_scroll=True)
+        target = self._list.get_row_at_index(keep_selection(selected, index, results))
         if target is not None:
             self._list.select_row(target)
+            GLib.idle_add(lambda: (self._scroll_to(target), GLib.SOURCE_REMOVE)[1])
 
     def set_query(self, text: str) -> None:
         self._entry.set_text(text)
@@ -328,20 +338,46 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     # --- results ---------------------------------------------------------------------
 
-    def _refresh(self) -> None:
+    def _refresh(self, complete: bool = False, keep_scroll: bool = False) -> list[Result]:
+        """Query again and rebuild the list. Rows past FIRST_ROWS are built on idle
+        unless `complete` (when a row further down must exist right away)."""
         preview_mode = self._mode in PREVIEW_MODES
         limit = LIST_LIMIT_PREVIEW_MODES if preview_mode else self.config.ui.max_results
         results = self._engine.query(self._entry.get_text(), self._mode, limit)
+        self._cancel_fill()
         self._list.remove_all()
-        for i, result in enumerate(results):
+        now = results if complete else results[:FIRST_ROWS]
+        for i, result in enumerate(now):
             self._list.append(ResultRow(result, i, self._row_action))
+        self._built = len(now)
+        self._unbuilt = results[len(now) :]
+        if self._unbuilt:
+            self._fill_source = GLib.idle_add(self._build_more_rows)
         first = self._list.get_row_at_index(0)
         if first is not None:
             self._list.select_row(first)
         else:
             self._update_preview(None)
         self._scroller.set_visible(bool(results) or preview_mode)
-        self._scroller.get_vadjustment().set_value(0)
+        if not keep_scroll:
+            self._scroller.get_vadjustment().set_value(0)
+        return results
+
+    def _build_more_rows(self) -> bool:
+        batch, self._unbuilt = self._unbuilt[:ROWS_PER_BATCH], self._unbuilt[ROWS_PER_BATCH:]
+        for i, result in enumerate(batch, self._built):
+            self._list.append(ResultRow(result, i, self._row_action))
+        self._built += len(batch)
+        if self._unbuilt:
+            return GLib.SOURCE_CONTINUE
+        self._fill_source = 0
+        return GLib.SOURCE_REMOVE
+
+    def _cancel_fill(self) -> None:
+        if self._fill_source:
+            GLib.source_remove(self._fill_source)
+            self._fill_source = 0
+        self._unbuilt = []
 
     def _update_preview(self, row: Gtk.ListBoxRow | None) -> None:
         preview = row.result.preview if row is not None else None
@@ -370,7 +406,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         except Exception as e:
             log.exception("%s failed for %s", name, row.result.id)
             self._app.notify_error(f"Could not {name} “{row.result.title}”", str(e))
-        self._refresh()
+        self._refresh(complete=True, keep_scroll=True)
         target = self._list.get_row_at_index(index) or self._list.get_row_at_index(index - 1)
         if target is not None:
             self._list.select_row(target)
@@ -539,6 +575,15 @@ def _section_header(row: ResultRow, before: ResultRow | None) -> None:
     label = Gtk.Label(label=section, xalign=0)
     label.add_css_class("section-header")
     row.set_header(label)
+
+
+def keep_selection(selected: str | None, index: int, results: list[Result]) -> int:
+    """Which row to select after the list was rebuilt: the entry that was selected (it
+    may have moved, e.g. below a newly copied one), else the same position."""
+    for i, result in enumerate(results):
+        if result.id == selected:
+            return i
+    return max(0, min(index, len(results) - 1))
 
 
 def edit_target(result_id: str) -> str | None:
