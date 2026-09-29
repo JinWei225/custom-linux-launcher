@@ -72,13 +72,15 @@ class _ClipboardPauseCommand:
         )
 
 
+# Opens Settings → Clipboard, which asks before deleting: from here a mistyped Enter
+# would wipe the history with no way back.
 _CLEAR_CLIPBOARD = _Command(
     "clipboard-clear",
-    "Clear Clipboard History",
-    "Delete every entry except pinned ones",
+    "Clear Clipboard History…",
+    "Choose what to delete in Launcher Settings; pinned entries are kept",
     "edit-clear-all-symbolic",
     ("clipboard", "delete", "forget", "wipe"),
-    lambda host: host.clear_clipboard(),
+    lambda host: host.open_settings("clipboard"),
 )
 
 

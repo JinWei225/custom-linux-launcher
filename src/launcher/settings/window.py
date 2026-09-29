@@ -161,14 +161,12 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def open_item(self, item: str) -> None:
         """Jump to an app, quicklink or snippet (from Ctrl+E in the launcher), or to a
-        page ("status", from the crash notice)."""
+        page by its key ("status" from the crash notice, "clipboard" to clear history)."""
         kind, _, key = item.partition(":")
 
         def show() -> bool:
             self._split.set_show_content(True)  # a narrow window shows one page at a time
-            if kind == "status":
-                self._stack.set_visible_child_name("status")
-            elif kind == "app":
+            if kind == "app":
                 self._stack.set_visible_child_name("apps")
                 AppDialog(self, key).present()
             elif kind == "quicklink":
@@ -179,6 +177,8 @@ class SettingsWindow(Adw.ApplicationWindow):
                 self._stack.set_visible_child_name("snippets")
                 exists = any(s.name.casefold() == key.casefold() for s in self.config.snippets)
                 SnippetDialog(self, key if exists else None, new_name=key).present()
+            elif self._stack.get_child_by_name(kind) is not None:
+                self._stack.set_visible_child_name(kind)
             return GLib.SOURCE_REMOVE
 
         GLib.idle_add(show)  # after the window is mapped, so the dialog has a parent

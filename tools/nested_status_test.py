@@ -122,6 +122,10 @@ def main() -> int:
     window = SettingsWindow(app)
     window.present()
     pump(0.8)
+    window.open_item("clipboard")  # "Clear Clipboard History…" in the launcher
+    pump(0.3)
+    check("--edit clipboard opens the Clipboard page",
+          window._stack.get_visible_child_name() == "clipboard")  # fmt: skip
     window.open_item("status")
     pump(0.3)
     stack = window._stack

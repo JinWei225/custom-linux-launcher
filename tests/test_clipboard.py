@@ -267,8 +267,9 @@ def test_pause_command_reflects_state(host):
     resumed = next(r for r in provider.query("clipboard") if r.id == "command:clipboard-pause")
     assert resumed.title == "Resume Clipboard Recording"
     clear = next(r for r in provider.query("clear clipboard") if r.id == "command:clipboard-clear")
-    clear.action()
-    assert host.calls == [("pause",), ("clear",)]
+    clear.action()  # nothing is deleted from here: Settings asks first
+    assert host.calls == [("pause",), ("settings", "clipboard")]
+    assert clear.title == "Clear Clipboard History…"
 
 
 def test_clear_recent_range_keeps_pinned_and_older():
