@@ -115,6 +115,7 @@ class MarkdownEditor(Gtk.TextView):
         self._number_boxes: dict[int, Graphene.Rect] = {}  # line -> drawn number (buffer coords)
         self._number_line: int | None = None  # the numbered item whose "1. " is being edited
         self._levels: list[int] = []  # per line: numbered lists it is nested in (1. / a) / i.)
+        self._blocks: list[tuple[int, int]] = []  # fenced code blocks: (first, last) line
         # Set by the window for the open note: where its pictures are, what to call new
         # ones, and what to do with Ctrl+clicked links and errors.
         self.base_dir: Path | None = None
@@ -271,7 +272,7 @@ class MarkdownEditor(Gtk.TextView):
     def load_text(self, text: str) -> None:
         """Show a note's text as it is (no renumbering, no rewrites), not undoable."""
         self._loading = True
-        self._lines, self._infos, self._levels = [], [], []
+        self._lines, self._infos, self._levels, self._blocks = [], [], [], []
         self.buffer.begin_irreversible_action()
         self.buffer.set_text(text)
         self.buffer.end_irreversible_action()
@@ -344,8 +345,11 @@ class MarkdownEditor(Gtk.TextView):
         old_lines, old_infos = self._lines, self._infos
         start = 0
         limit = min(len(lines), len(old_lines))
+        # Line infos are shared (cached) objects: "is" settles almost every line.
         while (
-            start < limit and lines[start] == old_lines[start] and infos[start] == old_infos[start]
+            start < limit
+            and lines[start] == old_lines[start]
+            and (infos[start] is old_infos[start] or infos[start] == old_infos[start])
         ):
             start += 1
         end_new, end_old = len(lines) - 1, len(old_lines) - 1
@@ -353,12 +357,13 @@ class MarkdownEditor(Gtk.TextView):
             end_new >= start
             and end_old >= start
             and lines[end_new] == old_lines[end_old]
-            and infos[end_new] == old_infos[end_old]
+            and (infos[end_new] is old_infos[end_old] or infos[end_new] == old_infos[end_old])
         ):
             end_new -= 1
             end_old -= 1
         self._lines, self._infos = lines, infos
         self._levels = md.ordered_levels(infos)
+        self._blocks = md.code_blocks(infos)
         self._cursor_line = self._cursor().get_line()
         if end_new >= start:
             for line in range(start, end_new + 1):
@@ -1076,17 +1081,15 @@ class MarkdownEditor(Gtk.TextView):
             snapshot.append_border(rounded, width, [border] * 4)
 
     def _draw_code_blocks(self, snapshot, top, bottom, width, color) -> None:
-        """A rounded background behind each fenced block that is on screen."""
-        infos = self._infos
-        n = 0
-        while n < len(infos):
-            if infos[n].kind != "fence":
-                n += 1
+        """A rounded background behind each fenced block that is on screen (only those
+        are measured: finding a line's position can lay out the text above it)."""
+        first_shown = self.get_line_at_y(top)[0].get_line()
+        last_shown = self.get_line_at_y(bottom)[0].get_line()
+        for n, last in self._blocks:
+            if last < first_shown:
                 continue
-            end = n + 1
-            while end < len(infos) and infos[end].kind == "code":
-                end += 1
-            last = min(end, len(infos) - 1)  # the closing fence, or the last line
+            if n > last_shown:
+                break
             y1, _ = self.get_line_yrange(self._line_start(n))
             y2, h2 = self.get_line_yrange(self._line_start(last))
             if y1 <= bottom and y2 + h2 >= top:
@@ -1096,4 +1099,3 @@ class MarkdownEditor(Gtk.TextView):
                 snapshot.push_rounded_clip(rounded)
                 snapshot.append_color(color, box)
                 snapshot.pop()
-            n = end + 1

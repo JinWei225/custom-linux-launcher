@@ -22,6 +22,8 @@ Inline styles inside a line (inline_spans): **bold**, *italic* / _italic_, ~~str
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import re
 from dataclasses import dataclass
 
@@ -99,18 +101,26 @@ def classify(lines: list[str]) -> list[LineInfo]:
                 stack.pop()
             if not stack or width > stack[-1]:
                 stack.append(width)
-            depth = min(len(stack) - 1, MAX_DEPTH)
-            info = LineInfo(**{**info.__dict__, "depth": depth})
+            info = _at_depth(info, min(len(stack) - 1, MAX_DEPTH))
         elif info.kind != "blank":
             stack.clear()
         infos.append(info)
     return infos
 
 
+@functools.lru_cache(maxsize=256)
 def _width(indent: str) -> int:
     return sum(4 if ch == "\t" else 1 for ch in indent)
 
 
+@functools.lru_cache(maxsize=32768)
+def _at_depth(info: LineInfo, depth: int) -> LineInfo:
+    return info if info.depth == depth else dataclasses.replace(info, depth=depth)
+
+
+# The editor classifies the whole note on every keystroke; lines seldom change, so the
+# per-line work (a dozen regexes) is cached. LineInfo is frozen, so sharing is safe.
+@functools.lru_cache(maxsize=32768)
 def _classify_line(line: str) -> LineInfo:
     if not line.strip():
         return LineInfo("blank")
@@ -251,13 +261,15 @@ def ordered_levels(infos: list[LineInfo]) -> list[int]:
     level picks the label style. Bullets in between don't count, a paragraph ends the
     lists, blank lines don't."""
     levels = []
-    stack: list[tuple[int, str]] = []  # (depth, kind) of the list items above
+    # (depth, numbered lists up to and including it) of the list items above
+    stack: list[tuple[int, int]] = []
     for info in infos:
         if info.kind in LIST_KINDS:
             while stack and stack[-1][0] >= info.depth:
                 stack.pop()
-            levels.append(sum(kind == "ordered" for _depth, kind in stack))
-            stack.append((info.depth, info.kind))
+            level = stack[-1][1] if stack else 0
+            levels.append(level)
+            stack.append((info.depth, level + (info.kind == "ordered")))
         else:
             if info.kind != "blank":
                 stack.clear()
@@ -528,6 +540,23 @@ class Heading:
     line: int
     level: int
     text: str
+
+
+def code_blocks(infos: list[LineInfo]) -> list[tuple[int, int]]:
+    """(first, last) line of each fenced code block, fences included; an unclosed block
+    runs to the end of the note."""
+    blocks = []
+    n = 0
+    while n < len(infos):
+        if infos[n].kind != "fence":
+            n += 1
+            continue
+        end = n + 1
+        while end < len(infos) and infos[end].kind == "code":
+            end += 1
+        blocks.append((n, min(end, len(infos) - 1)))  # the closing fence, or the last line
+        n = end + 1
+    return blocks
 
 
 def outline(lines: list[str], infos: list[LineInfo] | None = None) -> list[Heading]:

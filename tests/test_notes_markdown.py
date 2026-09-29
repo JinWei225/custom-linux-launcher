@@ -497,3 +497,22 @@ def test_sub_list_from_zero_has_distinct_labels():
     levels = ordered_levels(infos)
     labels = [list_label(infos[i].number, levels[i], infos[i].delim) for i in range(1, 5)]
     assert labels == ["0)", "a)", "0.", "i."]
+
+
+def test_code_block_ranges():
+    from launcher.notes_markdown import code_blocks
+
+    lines = ["text", "```py", "x", "y", "```", "", "~~~", "z"]
+    assert code_blocks(classify(lines)) == [(1, 4), (6, 7)]  # the last runs to the end
+    assert code_blocks(classify(["```", "```"])) == [(0, 1)]
+    assert code_blocks(classify(["```"])) == [(0, 0)]
+    assert code_blocks(classify(["no code"])) == []
+
+
+def test_classify_is_the_same_whatever_was_classified_before():
+    # Per-line results are cached and shared: a line's depth must still come from
+    # where it is, not from where the same text was seen first.
+    first = classify(["- a", "\t- b"])
+    second = classify(["\t- b"])
+    assert first[1].depth == 1 and second[0].depth == 0
+    assert classify(["- a", "\t- b"]) == first
