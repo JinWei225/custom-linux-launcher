@@ -469,3 +469,21 @@ def test_config_validation():
     for bad in ('home_currency = "ringgit"', 'home_currency = "M1R"', "refresh_hours = 0"):
         with pytest.raises(ConfigError):
             parse_texts(f"[converters]\n{bad}", None)
+
+
+@pytest.mark.parametrize("text", ["(-8)^0.5", "(-2)^(1/3)", "(" * 5000 + "1" + ")" * 5000])
+def test_evaluate_rejects_what_has_no_real_answer(text):
+    from launcher.currency import evaluate
+
+    assert evaluate(text) is None
+
+
+def test_evaluate_negative_base_whole_exponent():
+    from launcher.currency import evaluate
+
+    assert evaluate("(-2)^3") == -8
+    assert evaluate("(-2)^2") == 4
+
+
+def test_provider_gives_no_answer_for_a_complex_amount(host, tmp_path):
+    assert provider(host, tmp_path).query("(-8)^0.5 usd") == []

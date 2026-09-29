@@ -383,8 +383,8 @@ def evaluate(text: str) -> float | None:
     parser = _Arithmetic(tokens)
     try:
         value = parser.expr()
-    except (ValueError, ZeroDivisionError, OverflowError, IndexError):
-        return None
+    except (ValueError, ZeroDivisionError, OverflowError, IndexError, RecursionError):
+        return None  # RecursionError: thousands of nested brackets
     if parser.pos != len(tokens) or not math.isfinite(value) or abs(value) > MAX_AMOUNT:
         return None
     return value
@@ -425,6 +425,8 @@ class _Arithmetic:
             exponent = self.power()
             if abs(exponent) > 32:
                 raise ValueError("exponent too large")
+            if base < 0 and exponent != int(exponent):
+                raise ValueError("no real root")  # (-8)^0.5 would be a complex number
             return base**exponent
         return base
 
