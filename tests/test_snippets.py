@@ -160,3 +160,28 @@ def test_import_espanso_moves_matches(tmp_path):
     assert len(writer.load().snippets) == 4
     assert import_espanso(writer, base) == []  # nothing left to import
     assert isinstance(writer.load(), Config)
+
+
+@pytest.mark.parametrize(
+    ("tail", "steps"),
+    [
+        ("abc", 3),
+        ("", 0),
+        ("é ok", 4),  # é as e + combining accent: one step
+        ("\U0001f469‍\U0001f4bb!", 2),  # 👩‍💻 is one character
+        ("\U0001f44d\U0001f3fd", 1),  # 👍 with a skin tone
+        ("❤️", 1),  # ❤️ with its emoji-style selector
+        ("\U0001f1f2\U0001f1fe\U0001f1ef\U0001f1f5", 2),  # 🇲🇾🇯🇵: two flags
+        ("a\r\nb", 3),
+        ("中文", 2),
+    ],
+)
+def test_cursor_steps_count_what_reads_as_one_character(tail, steps):
+    from launcher.snippets import cursor_steps
+
+    assert cursor_steps(tail) == steps
+
+
+def test_cursor_goes_back_over_emoji():
+    text, after = expand("Thanks {cursor}\U0001f44d\U0001f3fd!", NOW)
+    assert text == "Thanks \U0001f44d\U0001f3fd!" and after == 2

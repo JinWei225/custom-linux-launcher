@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -63,7 +64,8 @@ def uses_clipboard(body: str) -> bool:
 
 
 def expand(body: str, now: datetime | None = None, clipboard: str = "") -> tuple[str, int]:
-    """The text to paste, and how many characters come after {cursor} (0 if none)."""
+    """The text to paste, and how many Left presses take the cursor back to {cursor}
+    (0 if there is none)."""
     now = now or datetime.now()
     before: list[str] = []
     after: list[str] | None = None  # set once the cursor position has been seen
@@ -80,7 +82,45 @@ def expand(body: str, now: datetime | None = None, clipboard: str = "") -> tuple
             text = clipboard
         (before if after is None else after).append(text)
     tail = "".join(after or [])
-    return "".join(before) + tail, len(tail)
+    return "".join(before) + tail, cursor_steps(tail)
+
+
+_ZWJ = "\u200d"
+
+
+def _joins_previous(ch: str) -> bool:
+    """Part of the character before it, as far as the cursor is concerned."""
+    cp = ord(ch)
+    return (
+        unicodedata.category(ch).startswith("M")  # combining accents
+        or 0xFE00 <= cp <= 0xFE0F  # variation selectors (emoji / text style)
+        or 0xE0100 <= cp <= 0xE01EF
+        or 0x1F3FB <= cp <= 0x1F3FF  # skin tones
+        or 0xE0020 <= cp <= 0xE007F  # tags (subdivision flags)
+    )
+
+
+def cursor_steps(text: str) -> int:
+    """How many times Left moves over this text: apps move by what reads as one
+    character (a grapheme), not by code point. An accent written as a combining mark,
+    an emoji with a skin tone or ZWJ sequence (👩‍💻), a flag (two regional indicators)
+    and \\r\\n each take one step. A close approximation of Unicode's rules."""
+    steps = 0
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        i += 1
+        steps += 1
+        if ch == "\r" and i < n and text[i] == "\n":
+            i += 1
+            continue
+        if 0x1F1E6 <= ord(ch) <= 0x1F1FF and i < n and 0x1F1E6 <= ord(text[i]) <= 0x1F1FF:
+            i += 1  # a flag: two regional indicators
+        while i < n and (_joins_previous(text[i]) or text[i] == _ZWJ):
+            if text[i] == _ZWJ and i + 1 < n:
+                i += 1  # the ZWJ and the character it joins on
+            i += 1
+    return steps
 
 
 def _strftime(now: datetime, fmt: str) -> str:
