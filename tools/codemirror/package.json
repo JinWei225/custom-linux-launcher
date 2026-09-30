@@ -1,0 +1,21 @@
+{
+  "name": "launcher-notes-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --format=iife --outfile=../../src/launcher/notes/web/editor.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6",
+    "@codemirror/lang-markdown": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@lezer/highlight": "^1",
+    "@lezer/markdown": "^1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25"
+  }
+}
