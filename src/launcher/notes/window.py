@@ -863,12 +863,13 @@ class NotesWindow(Adw.ApplicationWindow):
 
 
 def _make_editor() -> Gtk.Widget:
-    """The GTK editor, or the CodeMirror one (a prototype) with LAUNCHER_NOTES_EDITOR=web."""
-    if os.environ.get("LAUNCHER_NOTES_EDITOR") == "web":
+    """The CodeMirror editor (web_editor.py), or the GTK one when WebKit 6.0 isn't
+    installed or LAUNCHER_NOTES_EDITOR=gtk asks for it."""
+    if os.environ.get("LAUNCHER_NOTES_EDITOR") != "gtk":
         try:
             from .web_editor import WebMarkdownEditor
         except (ImportError, ValueError) as e:  # ValueError: WebKit 6.0 isn't installed
-            log.warning("web editor unavailable (%s): using the GTK one", e)
+            log.warning("CodeMirror editor unavailable (%s): using the GTK one", e)
         else:
             return WebMarkdownEditor()
     return MarkdownEditor()

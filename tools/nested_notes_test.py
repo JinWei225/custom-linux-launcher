@@ -60,8 +60,17 @@ def wait_for(predicate, seconds: float = 3.0) -> bool:
 
 def type_text(window: NotesWindow, text: str) -> None:
     """Type at the end of the note (opening a note puts the cursor at the start)."""
-    window.editor.buffer.place_cursor(window.editor.buffer.get_end_iter())
-    window.editor.buffer.insert_at_cursor(text)
+    editor = window.editor
+    if not hasattr(editor, "buffer"):  # the CodeMirror editor
+        wait_for(lambda: editor._ready, 10.0)
+        before = editor.text()
+        editor.place_cursor(-1)
+        script = f"notes.view.dispatch(notes.view.state.replaceSelection({json.dumps(text)}))"
+        editor.view.evaluate_javascript(script, -1, None, None, None, None, None)
+        wait_for(lambda: editor.text() != before, 3.0)
+        return
+    editor.buffer.place_cursor(editor.buffer.get_end_iter())
+    editor.buffer.insert_at_cursor(text)
     pump(0.05)
 
 

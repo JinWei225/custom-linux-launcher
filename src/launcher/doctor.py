@@ -59,6 +59,7 @@ class Facts:
     espanso_service: str = ""
     espanso_file: bool = False  # espanso's launcher.yml exists
     gi_cairo: bool = True
+    webkit: bool = True  # WebKitGTK 6.0, for the Notes editor
     shortcuts_missing: list[str] = field(default_factory=list)
     shortcut_clashes: list[str] = field(default_factory=list)
     notes_writable: bool = True
@@ -77,6 +78,7 @@ def evaluate(f: Facts) -> list[Check]:
         _shortcuts(f),
         _espanso(f),
         _notes(f),
+        _editor(f),
         _pdf(f),
         _rates(f),
         _folders(f),
@@ -294,6 +296,20 @@ def _notes(f: Facts) -> Check:
     return Check("notes", title, OK, folder)
 
 
+def _editor(f: Facts) -> Check:
+    title = "Notes editor"
+    if not f.webkit:
+        return Check(
+            "editor",
+            title,
+            WARNING,
+            "The gir1.2-webkit-6.0 package is missing: Notes uses its older GTK editor",
+            "Install it: sudo apt install gir1.2-webkit-6.0, then quit and reopen Notes",
+            shell="sudo apt install gir1.2-webkit-6.0",
+        )
+    return Check("editor", title, OK, "Ready")
+
+
 def _pdf(f: Facts) -> Check:
     title = "Notes PDF export"
     if not f.gi_cairo:
@@ -427,6 +443,12 @@ def gather(config_path: Path | None = None) -> Facts:
         gi.require_foreign("cairo")
     except ImportError:
         f.gi_cairo = False
+    try:
+        import gi
+
+        gi.require_version("WebKit", "6.0")
+    except ValueError:  # not installed (or another version is already loaded)
+        f.webkit = False
     try:
         f.shortcuts_missing, f.shortcut_clashes = shortcuts.check(f.config)
     except Exception as e:  # no GNOME settings schemas: report, don't crash

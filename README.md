@@ -63,7 +63,7 @@ recent notes in a sidebar you can hide (F9), an outline of the headings, pasted
 screenshots, export to PDF, and autosave (a second after you stop typing, and whenever
 you switch to another window). Notes also show up in the launcher's search. It starts
 hidden when you log in, so Super+Shift+N opens it at once (and hides it again); Ctrl+Q
-quits it.
+quits it. The editor is [CodeMirror](https://codemirror.net/) running in WebKitGTK.
 
 <p align="center">
   <img src="docs/screenshots/notes.png" width="49%" alt="A lecture note">
@@ -86,9 +86,10 @@ launcher shows serious ones in a banner, and tells you if it ever crashed and re
 
 - GNOME Shell 50 on Wayland (tested on Ubuntu 26.04). The helper extension declares the
   GNOME versions it was tested with.
-- Python 3.12 or newer with PyGObject, GTK 4, libadwaita and the cairo bridge:
+- Python 3.12 or newer with PyGObject, GTK 4, libadwaita, the cairo bridge and WebKitGTK
+  (for the Notes editor):
   ```sh
-  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1
+  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0
   ```
 - [uv](https://docs.astral.sh/uv/) to install the Python dependencies.
 - Optional: [espanso](https://espanso.org/install/) (Wayland build) for snippet triggers.
@@ -174,6 +175,8 @@ the last good settings stay in use.
 - **Clipboard history is empty / paste only copies:** the helper extension isn't running.
   Run `make install-extension`, then log out and back in.
 - **Notes can't export PDFs:** `sudo apt install python3-gi-cairo`.
+- **Notes uses the older editor** (the setup check says so): `sudo apt install
+  gir1.2-webkit-6.0`, then quit Notes (Ctrl+Q) and open it again.
 - **Logs:** `make logs` (`journalctl --user -u launcher -f`). If the launcher crashes,
   systemd restarts it and Launcher Settings → Status shows its last log lines.
 - **espanso flashes a window when you switch input sources:** `make install-espanso-fix`
@@ -188,7 +191,13 @@ make lint
 make test-extension   # the extension in a private headless GNOME Shell
 tools/nested-shell.sh .venv/bin/python tools/nested_e2e_test.py   # end to end
 make screenshots      # regenerate the images in this README
+make notes-web        # rebuild the Notes editor (needs Node.js) after editing tools/codemirror
+make test-notes-web   # type into the Notes editor for real, Pinyin and Hangul included
 ```
+
+The Notes editor's list rules live twice: in `notes_markdown.py` and in
+`tools/codemirror/src/markdown.js`. Change both; `tests/test_notes_web_parity.py` checks
+they agree (it needs Node.js).
 
 `tools/nested-shell.sh` runs a command inside a headless nested GNOME Shell with its own
 session bus and settings, so the extension, global shortcuts, paste and the windows are

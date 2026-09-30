@@ -172,7 +172,7 @@ Shortcuts are registered by `launcher install-shortcuts`, which writes GNOME cus
 - **Settings:** a Converters page in Launcher Settings (`[converters]` in config.toml).
 
 ### ✅ D11 — Notes (M7) — **decided 2026-09-28**
-- **Editor:** native Gtk.TextView with our own live formatting (no WebKit: only the GTK 3 build is installed, and a native view works best with the pinyin/hangul input methods).
+- **Editor:** ~~native Gtk.TextView with our own live formatting~~ **changed 2026-09-30:** CodeMirror 6 in a WebKitGTK 6 view (`notes/web_editor.py`, built from `tools/codemirror`). Hiding list markers in Gtk.TextView kept producing cursor and click bugs; CodeMirror's atomic replace decorations don't have them. WebKit 6.0 is installed now (`gir1.2-webkit-6.0`), and Pinyin and Hangul were tested in it. The list rules are ported to `markdown.js` and kept equal to `notes_markdown.py` by `tests/test_notes_web_parity.py`. The GTK editor stays as the fallback when WebKit is missing (or with `LAUNCHER_NOTES_EDITOR=gtk`).
 - **Markers:** applied as you type and hidden; shown again on the line the cursor is on (live preview, like Obsidian/Typora). The file always stays plain markdown.
 - **Storage:** one `.md` file per note in `~/Notes` (configurable), sub-folders as notebooks; named after the title; pins in `.notes.json`; deleting goes to the Trash.
 - **Sidebar:** Pinned, Recent, then the folder tree; hideable (F9). No tags or full-text search for now.
@@ -384,7 +384,9 @@ linux-launcher/
 │   ├── settings/                 # Launcher Settings app (window, dialogs, debug renderer)
 │   ├── notes_store.py            # notes on disk: tree, save/rename, pins, NoteSession (pure)
 │   ├── notes_markdown.py         # markdown line kinds and editing rules (pure)
-│   ├── notes/                    # Notes app: app.py, window.py, sidebar.py, editor.py
+│   ├── notes/                    # Notes app: app.py, window.py, sidebar.py, web_editor.py
+│   │                             #   (CodeMirror in WebKit; web/ is built from tools/codemirror),
+│   │                             #   editor.py (the GTK fallback)
 │   └── providers/
 │       ├── base.py               # Result, Provider and Host protocols
 │       ├── commands.py           # built-in: reload config, open config, quit
@@ -458,5 +460,5 @@ Each milestone ends with something you can use every day. Use the launcher yours
 | D8 | Shortcuts | Super+Shift + Return / V / P / S / F; main launcher kept on Ctrl+Space | 2026-09-24 | All editable in Launcher Settings with clash checks |
 | D9 | Autostart/packaging | systemd --user service + uv | 2026-09-24 | |
 | D10 | Converters | Auto-detect in main search; Enter copies / Alt+Enter pastes; own English date parser; open.er-api.com with disk cache; home currency only; 12/24 h from GNOME; Settings page | 2026-09-28 | Fixed-date holidays only |
-| D11 | Notes | Native GtkTextView live preview; .md files in ~/Notes; folders + pinned/recent; normal window, Super+Shift+N; autosave on pause and focus loss | 2026-09-28 | Part 1 built |
+| D11 | Notes | ~~Native GtkTextView~~ CodeMirror 6 in WebKitGTK live preview (2026-09-30; GtkTextView kept as fallback); .md files in ~/Notes; folders + pinned/recent; normal window, Super+Shift+N; autosave on pause and focus loss | 2026-09-28 | Editor switched 2026-09-30 after the user tested it; ~38 ms per keystroke in a 10,000-line note (GTK: ~55-63 ms) |
 | D12 | Polish | One System/Light/Dark setting; setup check (`--doctor`, Status page, after install); setup problems in the launcher; crash notice; public README, MIT | 2026-09-28 | Stability issues reported from daily use |

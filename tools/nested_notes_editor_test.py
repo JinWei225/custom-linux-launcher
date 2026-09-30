@@ -28,6 +28,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from launcher import paths  # noqa: E402
 from launcher.notes.window import NotesWindow  # noqa: E402
+
+# The GTK editor (the fallback without WebKit); the default one is
+# tested by nested_notes_web_test.py.
+os.environ["LAUNCHER_NOTES_EDITOR"] = "gtk"
 from launcher.settings.debug import snapshot  # noqa: E402
 
 SNAPSHOTS = Path(sys.argv[1]) if len(sys.argv) > 1 else None

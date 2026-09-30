@@ -33,6 +33,10 @@ from launcher import paths  # noqa: E402
 from launcher.notes import pdf as notes_pdf  # noqa: E402
 from launcher.notes.window import NotesWindow  # noqa: E402
 
+# The GTK editor (the fallback without WebKit); the default one is
+# tested by nested_notes_web_test.py.
+os.environ["LAUNCHER_NOTES_EDITOR"] = "gtk"
+
 NOTES = Path(os.environ["XDG_DATA_HOME"]) / "Notes"
 NOTE = """\
 # Heading here

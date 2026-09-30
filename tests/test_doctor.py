@@ -35,8 +35,8 @@ def test_a_healthy_setup_is_all_ok():
     checks = evaluate(healthy())
     assert [c.status for c in checks] == [OK] * len(checks)
     assert [c.key for c in checks] == [
-        "config", "service", "extension", "shortcuts", "espanso", "notes", "pdf", "rates",
-        "folders",
+        "config", "service", "extension", "shortcuts", "espanso", "notes", "editor", "pdf",
+        "rates", "folders",
     ]  # fmt: skip
     assert report(checks).endswith("Everything is set up.")
 
@@ -126,6 +126,10 @@ def test_notes_pdf_and_folders():
     pdf = by_key(healthy(gi_cairo=False))["pdf"]
     assert pdf.status == WARNING and "sudo apt install python3-gi-cairo" in pdf.fix
     assert pdf.command == ()  # needs sudo: never run for you
+    editor = by_key(healthy(webkit=False))["editor"]
+    assert editor.status == WARNING and "sudo apt install gir1.2-webkit-6.0" in editor.fix
+    assert editor.command == ()  # needs sudo: never run for you
+    assert by_key(healthy())["editor"].status == OK
     folders = by_key(healthy(missing_folders=["~/Desktop"]))["folders"]
     assert folders.status == WARNING and "~/Desktop" in folders.detail
 

@@ -252,9 +252,12 @@ def window_shots() -> None:
     notes.present()
     pump(1.0)
     notes.open_note("Signals & Systems/Lecture 3 – Fourier Series.md")
-    notes.editor.buffer.place_cursor(notes.editor.buffer.get_end_iter())
+    wait_for(lambda: notes.editor._ready, 10.0)
+    notes.editor.place_cursor(-1)  # the cursor off every line shown: no markup
     pump(1.0)
-    notes.editor.scroll_to_iter(notes.editor.buffer.get_start_iter(), 0, False, 0, 0)
+    notes.editor.view.evaluate_javascript(
+        "notes.view.scrollDOM.scrollTop = 0", -1, None, None, None, None, None
+    )
     pump(0.5)
     snapshot(notes, str(OUT / "notes.png"))
     ConfigWriter(paths.config_file()).set_value("ui", "appearance", "dark")
