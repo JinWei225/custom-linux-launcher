@@ -60,8 +60,8 @@ def wait_for(predicate, seconds: float = 3.0) -> bool:
 
 def type_text(window: NotesWindow, text: str) -> None:
     """Type at the end of the note (opening a note puts the cursor at the start)."""
-    window.buffer.place_cursor(window.buffer.get_end_iter())
-    window.buffer.insert_at_cursor(text)
+    window.editor.buffer.place_cursor(window.editor.buffer.get_end_iter())
+    window.editor.buffer.insert_at_cursor(text)
     pump(0.05)
 
 

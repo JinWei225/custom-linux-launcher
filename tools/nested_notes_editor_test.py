@@ -121,6 +121,7 @@ def main() -> int:
     app = Adw.Application(application_id="io.github.jinwei.LauncherNotesEditorTest")
     app.register(None)
     window = NotesWindow(app)
+    buffer = window.editor.buffer
     window.present()
     window.new_note()
     pump(0.8)
@@ -192,7 +193,7 @@ def main() -> int:
     t.type("\ninserted")
     expected = "1. one\n2. inserted\n3. two\n4. three"
     check("inserting an item renumbers the rest", t.text() == expected, repr(t.text()))
-    window.buffer.undo()
+    buffer.undo()
     pump(0.05)
     check(
         "one undo removes the item and its renumbering",
@@ -202,11 +203,11 @@ def main() -> int:
     t.clear()
     t.type("1. a\nb\nc")  # Enter types the next number itself
     t.go(1, 0)
-    it = window.buffer.get_iter_at_line(1)[1]
-    end = window.buffer.get_iter_at_line(2)[1]
-    window.buffer.begin_user_action()
-    window.buffer.delete(it, end)  # delete a whole line
-    window.buffer.end_user_action()
+    it = buffer.get_iter_at_line(1)[1]
+    end = buffer.get_iter_at_line(2)[1]
+    buffer.begin_user_action()
+    buffer.delete(it, end)  # delete a whole line
+    buffer.end_user_action()
     pump(0.05)
     check("deleting an item renumbers", t.text() == "1. a\n2. c", repr(t.text()))
 
@@ -240,17 +241,17 @@ def main() -> int:
     check("…which shows as text instead of being drawn", 0 not in labels(), repr(labels()))
     t.go(0, 0)
     check("the cursor may stay in the open number", t.cursor().get_line_offset() == 0)
-    window.buffer.begin_user_action()
-    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(0, c)[1] for c in (0, 1)))
-    window.buffer.insert(window.buffer.get_iter_at_line_offset(0, 0)[1], "3")
-    window.buffer.end_user_action()
+    buffer.begin_user_action()
+    buffer.delete(*(buffer.get_iter_at_line_offset(0, c)[1] for c in (0, 1)))
+    buffer.insert(buffer.get_iter_at_line_offset(0, 0)[1], "3")
+    buffer.end_user_action()
     pump(0.05)
     check("changing the first number renumbers the list from it", t.text() == "3. a\n4. b",
           repr(t.text()))  # fmt: skip
-    window.buffer.begin_user_action()
-    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(0, c)[1] for c in (1, 2)))
-    window.buffer.insert(window.buffer.get_iter_at_line_offset(0, 1)[1], ")")
-    window.buffer.end_user_action()
+    buffer.begin_user_action()
+    buffer.delete(*(buffer.get_iter_at_line_offset(0, c)[1] for c in (1, 2)))
+    buffer.insert(buffer.get_iter_at_line_offset(0, 1)[1], ")")
+    buffer.end_user_action()
     pump(0.05)
     check("the delimiter can be changed too", t.text().startswith("3) a"), repr(t.text()))
     t.key(Gdk.KEY_Return)
@@ -298,14 +299,14 @@ def main() -> int:
     t.type("1. top\n\tfirst\nsecond")
     t.go(2, 4)
     t.key(Gdk.KEY_Left)
-    shown = window.buffer.get_text(*(window.buffer.get_iter_at_line_offset(2, c)[1]
+    shown = buffer.get_text(*(buffer.get_iter_at_line_offset(2, c)[1]
                                      for c in (1, 3)), True)  # fmt: skip
     check("an opened sub-item number reads as drawn", shown == "b)" and 2 not in labels(),
           repr(shown))  # fmt: skip
-    window.buffer.begin_user_action()
-    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(1, c)[1] for c in (1, 2)))
-    window.buffer.insert(window.buffer.get_iter_at_line_offset(1, 1)[1], "c")
-    window.buffer.end_user_action()
+    buffer.begin_user_action()
+    buffer.delete(*(buffer.get_iter_at_line_offset(1, c)[1] for c in (1, 2)))
+    buffer.insert(buffer.get_iter_at_line_offset(1, 1)[1], "c")
+    buffer.end_user_action()
     pump(0.05)
     t.go(0, 3)
     check("changing a) to c) renumbers the sub-list in letters",
@@ -339,9 +340,9 @@ def main() -> int:
     t.clear()
     t.type("1. " + "wrapping words " * 30)
     pump(0.2)
-    first = window.editor.get_iter_location(window.buffer.get_iter_at_line_offset(0, 3)[1])
+    first = window.editor.get_iter_location(buffer.get_iter_at_line_offset(0, 3)[1])
     wrapped = None
-    it = window.buffer.get_iter_at_line_offset(0, 3)[1]
+    it = buffer.get_iter_at_line_offset(0, 3)[1]
     while not it.ends_line():
         rect = window.editor.get_iter_location(it)
         if rect.y > first.y + 5:
@@ -475,18 +476,18 @@ def main() -> int:
     t.clear()
     t.type("make this bold")
     t.go(0, 5)
-    it = window.buffer.get_iter_at_line(0)[1]
+    it = buffer.get_iter_at_line(0)[1]
     it.set_line_offset(9)
-    window.buffer.select_range(t.cursor(), it)
+    buffer.select_range(t.cursor(), it)
     t.key(Gdk.KEY_b, CTRL)
     check("Ctrl+B wraps the selection", t.text() == "make **this** bold", repr(t.text()))
-    bounds = window.buffer.get_selection_bounds()
-    check("the words stay selected", bounds and window.buffer.get_text(*bounds, True) == "this")
+    bounds = buffer.get_selection_bounds()
+    check("the words stay selected", bounds and buffer.get_text(*bounds, True) == "this")
     t.key(Gdk.KEY_b, CTRL)
     check("Ctrl+B again unwraps it", t.text() == "make this bold", repr(t.text()))
     t.key(Gdk.KEY_i, CTRL)
     check("Ctrl+I italic", t.text() == "make *this* bold", repr(t.text()))
-    window.buffer.undo()
+    buffer.undo()
     pump(0.05)
     check("one undo removes a style", t.text() == "make this bold", repr(t.text()))
     for key, shift, expected in (
@@ -498,9 +499,9 @@ def main() -> int:
         t.clear()
         t.type("make this bold")
         t.go(0, 5)
-        end = window.buffer.get_iter_at_line(0)[1]
+        end = buffer.get_iter_at_line(0)[1]
         end.set_line_offset(9)
-        window.buffer.select_range(t.cursor(), end)
+        buffer.select_range(t.cursor(), end)
         t.key(key, CTRL | SHIFT if shift else CTRL)
         check(f"shortcut makes {expected!r}", t.text() == expected, repr(t.text()))
     t.clear()
@@ -513,19 +514,19 @@ def main() -> int:
     t.clear()
     t.type("read the docs")
     t.go(0, 9)
-    end = window.buffer.get_iter_at_line(0)[1]
+    end = buffer.get_iter_at_line(0)[1]
     end.set_line_offset(13)
-    window.buffer.select_range(t.cursor(), end)
+    buffer.select_range(t.cursor(), end)
     t.key(Gdk.KEY_k, CTRL)
     t.type("https://gnome.org")
     check("Ctrl+K makes a link, cursor in the address",
           t.text() == "read the [docs](https://gnome.org)", repr(t.text()))  # fmt: skip
-    window.buffer.place_cursor(window.buffer.get_end_iter())  # out of the link, then Enter
+    buffer.place_cursor(buffer.get_end_iter())  # out of the link, then Enter
     t.type("\n")
     check("link text styled", "md-link" in t.tags(0, 10))
     check("link address hidden off the cursor's line", "md-hidden" in t.tags(0, 16))
     pump(0.2)
-    location = window.editor.get_iter_location(window.buffer.get_iter_at_line_offset(0, 11)[1])
+    location = window.editor.get_iter_location(buffer.get_iter_at_line_offset(0, 11)[1])
     url = window.editor.link_at(location.x + 1, location.y + location.height // 2)
     check("link found under the pointer", url == "https://gnome.org", repr(url))
     opened = []
@@ -533,7 +534,7 @@ def main() -> int:
     t.clear()
     t.type("see https://example.com/page and more\n")
     pump(0.2)
-    location = window.editor.get_iter_location(window.buffer.get_iter_at_line_offset(0, 8)[1])
+    location = window.editor.get_iter_location(buffer.get_iter_at_line_offset(0, 8)[1])
     url = window.editor.link_at(location.x + 1, location.y + location.height // 2)
     check("bare URLs are links", url == "https://example.com/page", repr(url))
     window.editor.link_handler = window._open_link
@@ -566,7 +567,7 @@ def main() -> int:
         pump(0.3)
         tags = t.tags(1, 0)
         check("room is made below the line", any(n is None for n in tags) or len(tags) > 1)
-        y, height = window.editor.get_line_yrange(window.buffer.get_iter_at_line(1)[1])
+        y, height = window.editor.get_line_yrange(buffer.get_iter_at_line(1)[1])
         check("the picture's height is reserved", height >= 200, f"line height {height}")
         check("the link text is hidden off the cursor's line", "md-hidden" in t.tags(1, 2))
         t.go(1, 3)
@@ -575,7 +576,7 @@ def main() -> int:
     png = texture.save_to_png_bytes()
     window.editor.get_clipboard().set_content(Gdk.ContentProvider.new_for_bytes("image/png", png))
     pump(0.2)
-    window.buffer.place_cursor(window.buffer.get_end_iter())
+    buffer.place_cursor(buffer.get_end_iter())
     window.editor.emit("paste-clipboard")
     ok = wait(lambda: t.text().count("![](attachments/") == 2, 3.0)
     check("a screenshot (image/png) pastes as a picture", ok, repr(t.text()))
@@ -588,7 +589,7 @@ def main() -> int:
 
     # An item with no text yet is as tall as a line of text, cursor where the text goes.
     def line_height(line: int) -> int:
-        return window.editor.get_line_yrange(window.buffer.get_iter_at_line(line)[1])[1]
+        return window.editor.get_line_yrange(buffer.get_iter_at_line(line)[1])[1]
 
     for empty in ("1. ", "- ", "- [ ] ", "\t- ", "> ", "## "):
         window.editor.load_text(f"word\n{empty}\nword")
@@ -601,7 +602,7 @@ def main() -> int:
         strong, _weak = window.editor.get_cursor_locations(None)
         t.type("x")
         pump(0.3)
-        it = window.buffer.get_iter_at_line_offset(1, len(empty))[1]
+        it = buffer.get_iter_at_line_offset(1, len(empty))[1]
         x = window.editor.get_iter_location(it).x
         check(f"the cursor on an empty {empty.strip()!r} line sits where its text goes",
               abs(strong.x - x) <= 1 and strong.height >= line_height(0) * 0.6,
@@ -620,17 +621,17 @@ def main() -> int:
     pump(0.5)
 
     def delete_line_two(*_args) -> bool:
-        s, z = window.buffer.get_iter_at_line(2)[1], window.buffer.get_iter_at_line(3)[1]
-        window.buffer.begin_user_action()
-        window.buffer.delete_interactive(s, z, True)
-        window.buffer.end_user_action()
+        s, z = buffer.get_iter_at_line(2)[1], buffer.get_iter_at_line(3)[1]
+        buffer.begin_user_action()
+        buffer.delete_interactive(s, z, True)
+        buffer.end_user_action()
         return GLib.SOURCE_REMOVE
 
     window.editor.add_tick_callback(delete_line_two)
     pump(0.5)
     ed = window.editor
     moved = {
-        line: (round(base), round(ed.get_line_yrange(window.buffer.get_iter_at_line(line)[1])[0]
+        line: (round(base), round(ed.get_line_yrange(buffer.get_iter_at_line(line)[1])[0]
                                   + ed._baseline(line, ed._infos[line])))
         for line, (_label, _right, base) in ed._numbers.items()
     }  # fmt: skip
@@ -646,10 +647,10 @@ def main() -> int:
 
     # Deleting a list's first item: the next one takes its number (1. / a)).
     def delete_lines(first: int, last: int) -> None:
-        s, z = window.buffer.get_iter_at_line(first)[1], window.buffer.get_iter_at_line(last)[1]
-        window.buffer.begin_user_action()
-        window.buffer.delete_interactive(s, z, True)
-        window.buffer.end_user_action()
+        s, z = buffer.get_iter_at_line(first)[1], buffer.get_iter_at_line(last)[1]
+        buffer.begin_user_action()
+        buffer.delete_interactive(s, z, True)
+        buffer.end_user_action()
         pump(0.1)
 
     window.editor.load_text("x\n1. one\n\ta) sub\n\tb) sub2\n2. two\n3. three")
@@ -668,10 +669,10 @@ def main() -> int:
     pump(0.2)
     t.go(0, 3)
     t.key(Gdk.KEY_Left)
-    window.buffer.begin_user_action()
-    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(0, c)[1] for c in (0, 1)))
-    window.buffer.insert(window.buffer.get_iter_at_line_offset(0, 0)[1], "5")
-    window.buffer.end_user_action()
+    buffer.begin_user_action()
+    buffer.delete(*(buffer.get_iter_at_line_offset(0, c)[1] for c in (0, 1)))
+    buffer.insert(buffer.get_iter_at_line_offset(0, 0)[1], "5")
+    buffer.end_user_action()
     pump(0.2)
     check("a first number changed on purpose stays", t.text() == "5. one\n6. two", repr(t.text()))
 
@@ -690,7 +691,7 @@ def main() -> int:
     window.open_note("Odd.md")
     pump(1.5)
     check("opening a note doesn't renumber or convert it", (NOTES / "Odd.md").read_text() == before)
-    check("the loaded note isn't undoable", not window.buffer.get_can_undo())
+    check("the loaded note isn't undoable", not buffer.get_can_undo())
 
     # Autosave writes plain markdown.
     t.clear()
@@ -716,13 +717,13 @@ def main() -> int:
         + "Text after the picture.\n\n---\n\n"
         "```python\nimport numpy as np\nx = np.fft.fft(signal)\n```\n"
     )
-    window.buffer.place_cursor(window.buffer.get_end_iter())
+    buffer.place_cursor(buffer.get_end_iter())
     pump(0.5)
     if SNAPSHOTS:
-        window.editor.scroll_to_iter(window.buffer.get_start_iter(), 0, False, 0, 0)
+        window.editor.scroll_to_iter(buffer.get_start_iter(), 0, False, 0, 0)
         pump(0.3)
         snapshot(window, str(SNAPSHOTS / "notes-markdown.png"))
-        window.editor.scroll_to_iter(window.buffer.get_end_iter(), 0, False, 0, 0)
+        window.editor.scroll_to_iter(buffer.get_end_iter(), 0, False, 0, 0)
         pump(0.3)
         snapshot(window, str(SNAPSHOTS / "notes-markdown-end.png"))
 

@@ -9,7 +9,7 @@ APPS_DIR    := $(HOME)/.local/share/applications
 UNIT_DIR    := $(HOME)/.config/systemd/user
 
 .PHONY: venv dev test lint format install uninstall logs install-espanso-fix uninstall-espanso-fix \
-	install-extension test-extension screenshots
+	install-extension test-extension screenshots notes-web test-notes-web
 
 venv: $(VENV)/.done
 $(VENV)/.done: pyproject.toml
@@ -90,6 +90,14 @@ install-extension:
 # Test the extension in a private headless GNOME Shell (no logout needed).
 test-extension: venv
 	tools/nested-shell.sh
+
+# The CodeMirror Notes editor (a prototype, LAUNCHER_NOTES_EDITOR=web): rebuild
+# src/launcher/notes/web/editor.js from tools/codemirror, and test it for real.
+notes-web:
+	cd tools/codemirror && npm ci --silent && npm run build
+
+test-notes-web: venv
+	tools/nested-shell.sh $(VENV)/bin/python tools/nested_notes_web_test.py
 
 # The README's screenshots, with made-up data, in a private headless GNOME Shell.
 screenshots: venv

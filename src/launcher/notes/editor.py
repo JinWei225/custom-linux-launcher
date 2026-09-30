@@ -69,6 +69,28 @@ SHORTCUTS = {  # (key, with shift) -> style
 _ENTER = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter)
 
 
+def save_picture(base_dir: Path | None, note_stem: str, texture: Gdk.Texture) -> str:
+    """Save a picture to attachments/ next to the note; returns its link path."""
+    if base_dir is None:
+        raise OSError("no note is open")
+    directory = base_dir / md.ATTACHMENTS
+    directory.mkdir(parents=True, exist_ok=True)
+    taken = set(os.listdir(directory))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = md.attachment_name(note_stem, stamp, taken)
+    if not texture.save_to_png(str(directory / name)):
+        raise OSError(f"writing {name} failed")
+    return f"{md.ATTACHMENTS}/{name}"
+
+
+def offers_picture(formats: Gdk.ContentFormats) -> bool:
+    """A clipboard holding a picture and no text: pasting it saves the picture."""
+    has_text = formats.contain_mime_type("text/plain") or formats.contain_mime_type(
+        "text/plain;charset=utf-8"
+    )
+    return not has_text and _offers_picture(formats)
+
+
 def _rect(x: float, y: float, w: float, h: float) -> Graphene.Rect:
     return Graphene.Rect().init(x, y, w, h)
 
@@ -88,6 +110,8 @@ def _rgba(spec: str) -> Gdk.RGBA:
 
 
 class MarkdownEditor(Gtk.TextView):
+    __gsignals__ = {"text-changed": (GObject.SignalFlags.RUN_FIRST, None, ())}
+
     def __init__(self) -> None:
         super().__init__(
             wrap_mode=Gtk.WrapMode.WORD_CHAR,
@@ -135,6 +159,7 @@ class MarkdownEditor(Gtk.TextView):
         # keystroke and its follow-up edits. Editing inside "changed" is unsafe (a
         # deletion is still in progress there).
         self.buffer.connect("end-user-action", self._on_user_action_done)
+        self.buffer.connect("changed", lambda _b: self.emit("text-changed"))
         self._touched: tuple[int, int] | None = None  # lines changed in this user action
         self._before: tuple[list[str], list[md.LineInfo]] = ([], [])
         self.buffer.connect("notify::cursor-position", self._on_cursor_moved)
@@ -304,6 +329,15 @@ class MarkdownEditor(Gtk.TextView):
 
     def cursor_line(self) -> int:
         return self._cursor().get_line()
+
+    def cursor_offset(self) -> int:
+        return self.buffer.get_property("cursor-position")
+
+    def place_cursor(self, offset: int) -> None:
+        """Put the cursor at a character offset (-1: the end)."""
+        end = self.buffer.get_char_count()
+        offset = end if offset < 0 else min(offset, end)
+        self.buffer.place_cursor(self.buffer.get_iter_at_offset(offset))
 
     def go_to_line(self, line: int) -> None:
         """Put the cursor at the start of a line's text and scroll that line to the top."""
@@ -953,11 +987,7 @@ class MarkdownEditor(Gtk.TextView):
         """Ctrl+V of a picture (a screenshot): save it next to the note and link it.
         Anything with text in it pastes as usual."""
         clipboard = self.get_clipboard()
-        formats = clipboard.get_formats()
-        has_text = formats.contain_mime_type("text/plain") or formats.contain_mime_type(
-            "text/plain;charset=utf-8"
-        )
-        if has_text or not _offers_picture(formats):
+        if not offers_picture(clipboard.get_formats()):
             return
         self.stop_emission_by_name("paste-clipboard")
         clipboard.read_texture_async(None, self._on_pasted_texture)
@@ -978,17 +1008,7 @@ class MarkdownEditor(Gtk.TextView):
         self.insert_picture_link(link)
 
     def save_picture(self, texture: Gdk.Texture) -> str:
-        """Save a picture to attachments/ next to the note; returns its link path."""
-        if self.base_dir is None:
-            raise OSError("no note is open")
-        directory = self.base_dir / md.ATTACHMENTS
-        directory.mkdir(parents=True, exist_ok=True)
-        taken = set(os.listdir(directory))
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        name = md.attachment_name(self.note_stem, stamp, taken)
-        if not texture.save_to_png(str(directory / name)):
-            raise OSError(f"writing {name} failed")
-        return f"{md.ATTACHMENTS}/{name}"
+        return save_picture(self.base_dir, self.note_stem, texture)
 
     def insert_picture_link(self, link: str) -> None:
         """Put ![](link) on a line of its own at the cursor; the cursor goes below it."""

@@ -158,12 +158,14 @@ class NotesWindow(Adw.ApplicationWindow):
         self._banner = Adw.Banner(button_label="Reload")
         self._banner.connect("button-clicked", lambda _b: self._reload_from_disk())
 
-        self.editor = MarkdownEditor()
+        self.editor = _make_editor()
         self.editor.link_handler = self._open_link
         self.editor.error_handler = self.toast
-        self.buffer = self.editor.buffer
-        self.buffer.connect("changed", self._on_changed)
-        scroller = Gtk.ScrolledWindow(child=self.editor, vexpand=True)
+        self.editor.connect("text-changed", self._on_changed)
+        if getattr(self.editor, "scrolls_itself", False):
+            scroller = self.editor
+        else:
+            scroller = Gtk.ScrolledWindow(child=self.editor, vexpand=True)
 
         empty = Adw.StatusPage(
             icon_name="document-edit-symbolic",
@@ -342,8 +344,7 @@ class NotesWindow(Adw.ApplicationWindow):
         self._loading = True
         self.editor.load_text(session.saved_text)  # not undoable, never rewritten on load
         self._loading = False
-        where = self.buffer.get_end_iter() if cursor_at_end else self.buffer.get_start_iter()
-        self.buffer.place_cursor(where)
+        self.editor.place_cursor(-1 if cursor_at_end else 0)
         self._banner.set_revealed(False)
         self._stack.set_visible_child_name("editor")
         self._expand_to(session.rel)
@@ -392,7 +393,7 @@ class NotesWindow(Adw.ApplicationWindow):
             self.refresh()
         return True
 
-    def _on_changed(self, _buffer: Gtk.TextBuffer) -> None:
+    def _on_changed(self, _editor) -> None:
         if self._loading or self.session is None:
             return
         if self._save_source:
@@ -606,7 +607,7 @@ class NotesWindow(Adw.ApplicationWindow):
     def _reload_from_disk(self) -> None:
         if self.session is None:
             return
-        offset = self.buffer.get_property("cursor-position")
+        offset = self.editor.cursor_offset()
         try:
             text = self.session.reload()
         except NotesError as e:
@@ -615,7 +616,7 @@ class NotesWindow(Adw.ApplicationWindow):
         self._loading = True
         self.editor.load_text(text)
         self._loading = False
-        self.buffer.place_cursor(self.buffer.get_iter_at_offset(min(offset, len(text))))
+        self.editor.place_cursor(min(offset, len(text)))
         self._banner.set_revealed(False)
         self._update_title()
 
@@ -859,6 +860,18 @@ class NotesWindow(Adw.ApplicationWindow):
 
     def toast(self, message: str) -> None:
         self._toasts.add_toast(Adw.Toast(title=message, timeout=5))
+
+
+def _make_editor() -> Gtk.Widget:
+    """The GTK editor, or the CodeMirror one (a prototype) with LAUNCHER_NOTES_EDITOR=web."""
+    if os.environ.get("LAUNCHER_NOTES_EDITOR") == "web":
+        try:
+            from .web_editor import WebMarkdownEditor
+        except (ImportError, ValueError) as e:  # ValueError: WebKit 6.0 isn't installed
+            log.warning("web editor unavailable (%s): using the GTK one", e)
+        else:
+            return WebMarkdownEditor()
+    return MarkdownEditor()
 
 
 def _item(label: str, action: str, target: str) -> Gio.MenuItem:
