@@ -136,6 +136,7 @@ class MarkdownEditor(Gtk.TextView):
         # deletion is still in progress there).
         self.buffer.connect("end-user-action", self._on_user_action_done)
         self._touched: tuple[int, int] | None = None  # lines changed in this user action
+        self._before: tuple[list[str], list[md.LineInfo]] = ([], [])
         self.buffer.connect("notify::cursor-position", self._on_cursor_moved)
         self._cursor_idle = 0
         self._drawn_rows: list[tuple[int, int, int]] = []  # what the markers were drawn at
@@ -327,12 +328,23 @@ class MarkdownEditor(Gtk.TextView):
     def _on_changed(self, _buffer: Gtk.TextBuffer) -> None:
         if self._editing:
             return
+        before = self._lines, self._infos
         changed = self._restyle()
-        if changed is not None and not self._loading and not self._undoing:
-            a, z = changed
-            if self._touched is not None:
-                a, z = min(a, self._touched[0]), max(z, self._touched[1])
-            self._touched = (a, z)
+        if not self._loading and not self._undoing:
+            self._touch(changed, before)
+
+    def _touch(
+        self, changed: tuple[int, int] | None, before: tuple[list[str], list[md.LineInfo]]
+    ) -> None:
+        """Note the lines a user action changed, and the note from before it."""
+        if changed is None:
+            return
+        a, z = changed
+        if self._touched is not None:
+            a, z = min(a, self._touched[0]), max(z, self._touched[1])
+        else:
+            self._before = before
+        self._touched = (a, z)
 
     def _on_user_action_done(self, _buffer: Gtk.TextBuffer) -> None:
         touched, self._touched = self._touched, None
@@ -344,7 +356,7 @@ class MarkdownEditor(Gtk.TextView):
         finally:
             self._editing = False
         self._restyle()
-        self._renumber(*touched)
+        self._renumber(*touched, *self._before)
 
     def _restyle(self) -> tuple[int, int] | None:
         """Re-tag the lines whose text or kind changed. Returns the lines touched (for
@@ -602,17 +614,21 @@ class MarkdownEditor(Gtk.TextView):
         length, replacement = found
         self._replace(line, 0, length, replacement)
 
-    def _renumber(self, first: int, last: int) -> None:
-        """Renumber the ordered list(s) around the lines just changed."""
+    def _renumber(
+        self, first: int, last: int, old_lines: list[str], old_infos: list[md.LineInfo]
+    ) -> None:
+        """Renumber the ordered list(s) around the lines just changed from old_lines (a
+        list whose first item went keeps its start)."""
         infos, lines = self._infos, self._lines
         if not any(i.kind == "ordered" for i in infos):
             return
+        starts = md.kept_starts(old_lines, old_infos, lines, infos)
         a, z = first, min(last, len(infos) - 1)
         while a > 0 and infos[a - 1].kind in (*md.LIST_KINDS, "blank"):
             a -= 1
         while z + 1 < len(infos) and infos[z + 1].kind in (*md.LIST_KINDS, "blank"):
             z += 1
-        edits = [e for e in md.renumber(lines, infos) if a <= e[0] <= z]
+        edits = [e for e in md.renumber(lines, infos, starts) if a <= e[0] <= z]
         if not edits:
             return
         cursor = self.buffer.create_mark(None, self._cursor(), False)
@@ -629,17 +645,13 @@ class MarkdownEditor(Gtk.TextView):
     def _user_edit(self, edit) -> None:
         """Run an edit as one undo step (renumbering follows at the end of it)."""
         self.buffer.begin_user_action()
+        before = self._lines, self._infos
         self._editing = True
         try:
             edit()
         finally:
             self._editing = False
-        changed = self._restyle()
-        if changed is not None:
-            a, z = changed
-            if self._touched is not None:
-                a, z = min(a, self._touched[0]), max(z, self._touched[1])
-            self._touched = (a, z)
+        self._touch(self._restyle(), before)
         self.buffer.end_user_action()  # -> _on_user_action_done: renumber
         self.scroll_mark_onscreen(self.buffer.get_insert())
 

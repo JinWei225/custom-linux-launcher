@@ -6,6 +6,7 @@ from launcher.notes_markdown import (
     continuation,
     indent,
     is_empty_item,
+    kept_starts,
     outdent,
     renumber,
     task_shorthand,
@@ -176,6 +177,45 @@ def test_renumber_keeps_start_and_restarts_after_bullets():
     assert renumber(lines, classify(lines)) == []
     lines = ["9. a", "9. b", "9. c"]  # 9 -> 10 changes the width
     assert renumber(lines, classify(lines)) == [(1, 0, 1, "10"), (2, 0, 1, "11")]
+
+
+def after_edit(old: list[str], new: list[str]) -> list[str]:
+    """new, renumbered the way the editor does after the edit that turned old into it."""
+    infos = classify(new)
+    starts = kept_starts(old, classify(old), new, infos)
+    out = list(new)
+    for line, a, z, number in renumber(new, infos, starts):
+        out[line] = out[line][:a] + number + out[line][z:]
+    return out
+
+
+@pytest.mark.parametrize(
+    "old, new, expected",
+    [
+        # Deleting a list's first item: the next one takes its number.
+        (["x", "1. a", "2. b", "3. c"], ["x", "2. b", "3. c"], ["x", "1. b", "2. c"]),
+        (["1. a", "2. b", "3. c"], ["3. c"], ["1. c"]),
+        (["5. a", "6. b"], ["6. b"], ["5. b"]),  # a list starting at 5 still does
+        (["1. a", "\ta) s", "\tb) t", "2. b"], ["1. a", "\tb) t", "2. b"],
+         ["1. a", "\ta) t", "2. b"]),
+        (["1. a", "\ta) s", "\t\ti. p", "\t\tii. q"], ["1. a", "\ta) s", "\t\tii. q"],
+         ["1. a", "\ta) s", "\t\ti. q"]),
+        # The first item made text (Backspace on its marker): the list restarts after it.
+        (["1. a", "2. b"], ["a", "2. b"], ["a", "1. b"]),
+        # A number changed on purpose stays.
+        (["1. a", "2. b"], ["5. a", "2. b"], ["5. a", "6. b"]),
+        # A list interrupted by a paragraph goes on counting after it.
+        (["1. a", "2. b", "3. c"], ["1. a", "2. b", "text", "3. c"],
+         ["1. a", "2. b", "text", "3. c"]),
+        # A new list typed as "5. " starts at 5; one below an edit is left alone.
+        (["x", "", "y"], ["x", "5. a", "y"], ["x", "5. a", "y"]),
+        (["1. a", "", "t", "4. b"], ["", "", "t", "4. b"], ["", "", "t", "4. b"]),
+        # A deleted item in the middle: the rest renumber as before.
+        (["1. a", "2. b", "3. c"], ["1. a", "3. c"], ["1. a", "2. c"]),
+    ],
+)  # fmt: skip
+def test_deleting_a_first_item_keeps_the_lists_start(old, new, expected):
+    assert after_edit(old, new) == expected
 
 
 def test_bare_quote_marker_continues_a_quote_only():

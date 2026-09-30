@@ -644,6 +644,37 @@ def main() -> int:
     del ed._redraw
     settings.props.gtk_cursor_blink = blink
 
+    # Deleting a list's first item: the next one takes its number (1. / a)).
+    def delete_lines(first: int, last: int) -> None:
+        s, z = window.buffer.get_iter_at_line(first)[1], window.buffer.get_iter_at_line(last)[1]
+        window.buffer.begin_user_action()
+        window.buffer.delete_interactive(s, z, True)
+        window.buffer.end_user_action()
+        pump(0.1)
+
+    window.editor.load_text("x\n1. one\n\ta) sub\n\tb) sub2\n2. two\n3. three")
+    pump(0.2)
+    delete_lines(2, 3)
+    check("deleting the first sub-item makes the next a)",
+          t.text() == "x\n1. one\n\ta) sub2\n2. two\n3. three", repr(t.text()))  # fmt: skip
+    delete_lines(1, 3)
+    check("deleting the first item makes the next 1.",
+          t.text() == "x\n1. two\n2. three", repr(t.text()))  # fmt: skip
+    t.go(1, 3)
+    t.key(Gdk.KEY_BackSpace)
+    check("Backspace on the first item's marker: the list restarts below it",
+          t.text() == "x\ntwo\n1. three", repr(t.text()))  # fmt: skip
+    window.editor.load_text("1. one\n2. two")
+    pump(0.2)
+    t.go(0, 3)
+    t.key(Gdk.KEY_Left)
+    window.buffer.begin_user_action()
+    window.buffer.delete(*(window.buffer.get_iter_at_line_offset(0, c)[1] for c in (0, 1)))
+    window.buffer.insert(window.buffer.get_iter_at_line_offset(0, 0)[1], "5")
+    window.buffer.end_user_action()
+    pump(0.2)
+    check("a first number changed on purpose stays", t.text() == "5. one\n6. two", repr(t.text()))
+
     # Input methods: while composing, Enter and Tab belong to the IME.
     t.clear()
     t.type("- 中文")

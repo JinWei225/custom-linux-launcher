@@ -400,32 +400,81 @@ def step_out(lines: list[str], infos: list[LineInfo], n: int) -> str:
     return outdent(lines[n])
 
 
-def renumber(lines: list[str], infos: list[LineInfo]) -> list[tuple[int, int, int, str]]:
-    """Edits that number each ordered list 1, 2, 3... from its first item's number.
-
-    A list runs over items of the same depth; deeper items and blank lines in between
-    don't break it. Each item keeps its style (1 / a / i). Returns (line, start column,
-    end column, new number as written)."""
-    if len(lines) != len(infos):
-        raise ValueError("lines and infos differ in length")
-    edits = []
-    counters: dict[int, int] = {}  # depth -> next number
+def _lists(infos: list[LineInfo]) -> list[list[int]]:
+    """The numbered lists, each as its items' line numbers. A list runs over items of
+    the same depth; deeper items and blank lines in between don't break it."""
+    lists: list[list[int]] = []
+    open_: dict[int, list[int]] = {}  # depth -> the list running at that depth
     for i, info in enumerate(infos):
         if info.kind == "ordered":
-            for depth in [d for d in counters if d > info.depth]:
-                del counters[depth]
-            expected = counters.get(info.depth, info.number)
+            for depth in [d for d in open_ if d > info.depth]:
+                del open_[depth]
+            if info.depth not in open_:
+                open_[info.depth] = []
+                lists.append(open_[info.depth])
+            open_[info.depth].append(i)
+        elif info.kind in ("bullet", "task"):
+            for depth in [d for d in open_ if d >= info.depth]:
+                del open_[depth]
+        elif info.kind != "blank":
+            open_.clear()
+    return lists
+
+
+def renumber(
+    lines: list[str], infos: list[LineInfo], starts: dict[int, int] | None = None
+) -> list[tuple[int, int, int, str]]:
+    """Edits that number each ordered list 1, 2, 3... from its first item's number (or
+    from starts[first item's line]). Each item keeps its style (1 / a / i). Returns
+    (line, start column, end column, new number as written)."""
+    if len(lines) != len(infos):
+        raise ValueError("lines and infos differ in length")
+    starts = starts or {}
+    edits = []
+    for items in _lists(infos):
+        first = starts.get(items[0], infos[items[0]].number)
+        for expected, i in enumerate(items, first):
+            info = infos[i]
             if info.number != expected:
                 start = len(info.indent)
                 end = len(lines[i][: info.content].rstrip()) - len(info.delim)
                 edits.append((i, start, end, format_number(expected, info.style)))
-            counters[info.depth] = expected + 1
-        elif info.kind in ("bullet", "task"):
-            for depth in [d for d in counters if d >= info.depth]:
-                del counters[depth]
-        elif info.kind != "blank":
-            counters.clear()
-    return edits
+    return sorted(edits)
+
+
+def kept_starts(
+    old_lines: list[str], old_infos: list[LineInfo], lines: list[str], infos: list[LineInfo]
+) -> dict[int, int]:
+    """Where an edit took away a list's first item (deleted it, or made it text), the
+    item now first takes over its number: deleting "1. a" leaves "1. b", not "2. b".
+    For renumber: {first item's line: number}. A first item that was itself edited
+    (its number changed on purpose) keeps what it says."""
+    shortest = min(len(old_lines), len(lines))
+    p = 0
+    while p < shortest and old_lines[p] == lines[p]:
+        p += 1
+    q = 0
+    while q < shortest - p and old_lines[-1 - q] == lines[-1 - q]:
+        q += 1
+    old_changed = range(p, len(old_lines) - q)
+    if not any(old_infos[i].kind == "ordered" for i in old_changed):
+        return {}
+    shift = len(lines) - len(old_lines)
+    starts: dict[int, int] = {}
+    old_lists = [items for items in _lists(old_infos) if items[0] in old_changed]
+    for items in _lists(infos):
+        if items[0] < len(lines) - q and items[0] >= p:
+            continue  # the first item itself was edited
+        was = {i if i < p else i - shift for i in items}
+        for old in old_lists:
+            if (
+                was.intersection(old)
+                and old_infos[old[0]].style == infos[items[0]].style
+                and old_infos[old[0]].depth == infos[items[0]].depth
+            ):
+                starts[items[0]] = old_infos[old[0]].number
+                break
+    return starts
 
 
 # --- inline styles --------------------------------------------------------------------
