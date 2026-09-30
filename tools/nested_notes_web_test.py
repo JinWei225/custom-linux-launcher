@@ -175,6 +175,57 @@ def input_methods(io: Input, editor) -> None:
           repr(lines()[row]))  # fmt: skip
 
 
+def long_note(io: Input, window: NotesWindow) -> None:
+    """A 10,000-line note with a 500-item list: Enter in the list renumbers all of it,
+    and a keystroke reaches Python in about the time it takes the GTK editor (~40 ms
+    here, against ~60 ms for the GTK one; the nested shell adds to both)."""
+    text = ["# Long note", ""]
+    text += [f"{i}. item {i} with **bold** and a [link](https://x.org/{i})" for i in range(1, 501)]
+    n = 0
+    while len(text) < 10000:
+        n += 1
+        text += [f"## Section {n}", "", f"Paragraph {n} with *italic*, `code` and ==marks==."]
+        text += ["- bullet", "\t- nested", "- [ ] task", "> quote", "```", "code", "```", ""]
+        text += [f"Plain line {n}.{k} of prose that goes on for a while." for k in range(30)]
+    (NOTES / "Long.md").write_text("\n".join(text[:10000]) + "\n")
+    editor = window.editor
+    window.open_note("Long.md")
+    check("a 10,000-line note opens", wait_for(lambda: editor.text().count("\n") == 10000))
+
+    def lines() -> list[str]:
+        return editor.text().split("\n")
+
+    editor.go_to_line(12)  # "11. item 11 ..."
+    pump(0.5)
+    io.key(Gdk.KEY_End)
+    io.type("\nnew")
+    wait_for(lambda: lines()[13] == "12. new", 2.0)
+    check("Enter in a long list inserts its next number", lines()[13] == "12. new",
+          repr(lines()[13]))  # fmt: skip
+    check("and renumbers the 490 items after it", lines()[502].startswith("501. item 500"),
+          repr(lines()[502][:20]))  # fmt: skip
+
+    editor.go_to_line(5000)
+    pump(0.5)
+    io.key(Gdk.KEY_End)
+    context = GLib.MainContext.default()
+    times = []
+    for _ in range(20):
+        size = len(editor.text())
+        start = time.monotonic()
+        io._call("Key", GLib.Variant("(ub)", (Gdk.KEY_z, True)))
+        io._call("Key", GLib.Variant("(ub)", (Gdk.KEY_z, False)))
+        while len(editor.text()) == size and time.monotonic() < start + 2:
+            context.iteration(False) or time.sleep(0.001)
+        times.append((time.monotonic() - start) * 1000)
+        pump(0.05)
+    median = sorted(times)[len(times) // 2]
+    print(f"keystroke in a 10,000-line note: median {median:.0f} ms, max {max(times):.0f} ms")
+    check("typing in a long note stays quick", median < 100, f"median {median:.0f} ms")
+    window.save_now()
+    check("the long note saves as typed", (NOTES / "Long.md").read_text() == editor.text())
+
+
 def main() -> int:
     NOTES.mkdir(parents=True, exist_ok=True)
     (NOTES / "Test.md").write_text(NOTE)
@@ -285,6 +336,9 @@ def main() -> int:
     pump(1.0)
     snapshot(window, str(OUT / "web-notes-dark.png"))
     print("screenshots in", OUT)
+    Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.DEFAULT)
+
+    long_note(io, window)
 
     failed = [name for name, ok in results if not ok]
     print(f"{len(results) - len(failed)}/{len(results)} passed")

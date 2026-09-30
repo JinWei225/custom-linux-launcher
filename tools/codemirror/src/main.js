@@ -744,6 +744,7 @@ window.notes = {
     const rect = view.coordsAtPos(Math.min(line.from + col, line.to), 1);
     return rect && { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
   },
+  view, // for tests and the web inspector
 };
 
 post({ type: "ready" });
