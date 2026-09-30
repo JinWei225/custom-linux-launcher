@@ -138,6 +138,8 @@ class MarkdownEditor(Gtk.TextView):
         self._touched: tuple[int, int] | None = None  # lines changed in this user action
         self.buffer.connect("notify::cursor-position", self._on_cursor_moved)
         self._cursor_idle = 0
+        self._drawn_rows: list[tuple[int, int, int]] = []  # what the markers were drawn at
+        self._redraw_idle = 0
         for signal in ("undo", "redo"):
             self.buffer.connect(signal, self._set_undoing, True)
             self.buffer.connect_after(signal, self._set_undoing, False)
@@ -990,7 +992,14 @@ class MarkdownEditor(Gtk.TextView):
     # --- drawing -------------------------------------------------------------------------
 
     def do_snapshot_layer(self, layer: Gtk.TextViewLayer, snapshot: Gtk.Snapshot) -> None:
-        if layer != Gtk.TextViewLayer.BELOW_TEXT or not self._infos:
+        if not self._infos:
+            return
+        if layer == Gtk.TextViewLayer.ABOVE_TEXT:
+            # GtkTextView draws the layer below the text before it lays out the lines an
+            # edit changed (typing gets no idle in between): the markers may have gone
+            # where the lines were. By now the text is laid out: if they moved, draw again.
+            if self._drawn_rows != self._screen_rows() and not self._redraw_idle:
+                self._redraw_idle = GLib.idle_add(self._redraw)
             return
         visible = self.get_visible_rect()
         top, bottom = visible.y, visible.y + visible.height
@@ -1007,12 +1016,8 @@ class MarkdownEditor(Gtk.TextView):
         self._number_boxes = {}
 
         self._draw_code_blocks(snapshot, top, bottom, width, faint)
-        it, _ = self.get_line_at_y(top)
-        while True:
-            line = it.get_line()
-            y, height = self.get_line_yrange(it)
-            if y > bottom or line >= len(self._infos):
-                break
+        self._drawn_rows = self._screen_rows()
+        for line, y, height in self._drawn_rows:
             info = self._infos[line]
             if info.kind == "bullet":
                 glyph = BULLETS[info.depth % len(BULLETS)]
@@ -1044,8 +1049,25 @@ class MarkdownEditor(Gtk.TextView):
             elif info.kind == "rule" and line != self._cursor_line:
                 mid = y + (height - self.get_pixels_below_lines()) / 2
                 snapshot.append_color(dim, _rect(self._margin, mid, width - 2 * self._margin, 1))
+
+    def _screen_rows(self) -> list[tuple[int, int, int]]:
+        """(line, y, height) of the lines on screen."""
+        visible = self.get_visible_rect()
+        rows = []
+        it, _ = self.get_line_at_y(visible.y)
+        while it.get_line() < len(self._infos):
+            y, height = self.get_line_yrange(it)
+            if y > visible.y + visible.height:
+                break
+            rows.append((it.get_line(), y, height))
             if not it.forward_line():
                 break
+        return rows
+
+    def _redraw(self) -> bool:
+        self._redraw_idle = 0
+        self.queue_draw()
+        return GLib.SOURCE_REMOVE
 
     def _baseline(self, line: int, info: md.LineInfo) -> float:
         """Distance from a line's top to the baseline of its first row of text.

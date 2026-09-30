@@ -607,6 +607,43 @@ def main() -> int:
               abs(strong.x - x) <= 1 and strong.height >= line_height(0) * 0.6,
               f"cursor x {strong.x} h {strong.height}, text x {x}")  # fmt: skip
 
+    # Deleting an item moves the numbers below it up with their lines at once, without
+    # waiting for another redraw (the cursor stops blinking after 10 s: nothing redraws).
+    # The edit is made inside a frame, as a key press is: no idle runs before drawing.
+    settings = Gtk.Settings.get_default()
+    blink = settings.props.gtk_cursor_blink
+    settings.props.gtk_cursor_blink = False
+    window.editor.load_text(
+        "intro\n1. one\n2. two\n3. three\n\nmiddle\n1. alpha\n\ta) sub\n2. beta\n"
+    )
+    t.go(0, 0)
+    pump(0.5)
+
+    def delete_line_two(*_args) -> bool:
+        s, z = window.buffer.get_iter_at_line(2)[1], window.buffer.get_iter_at_line(3)[1]
+        window.buffer.begin_user_action()
+        window.buffer.delete_interactive(s, z, True)
+        window.buffer.end_user_action()
+        return GLib.SOURCE_REMOVE
+
+    window.editor.add_tick_callback(delete_line_two)
+    pump(0.5)
+    ed = window.editor
+    moved = {
+        line: (round(base), round(ed.get_line_yrange(window.buffer.get_iter_at_line(line)[1])[0]
+                                  + ed._baseline(line, ed._infos[line])))
+        for line, (_label, _right, base) in ed._numbers.items()
+    }  # fmt: skip
+    check("numbers below a deleted item follow their lines",
+          len(moved) == 5 and all(a == b for a, b in moved.values()), repr(moved))  # fmt: skip
+    redraws = []
+    ed._redraw = lambda: redraws.append(1) or type(ed)._redraw(ed)
+    ed.queue_draw()
+    pump(1.0)
+    check("an idle note isn't redrawn over and over", len(redraws) <= 1, f"{len(redraws)} redraws")
+    del ed._redraw
+    settings.props.gtk_cursor_blink = blink
+
     # Input methods: while composing, Enter and Tab belong to the IME.
     t.clear()
     t.type("- 中文")
