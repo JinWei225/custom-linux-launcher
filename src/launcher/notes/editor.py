@@ -191,6 +191,12 @@ class MarkdownEditor(Gtk.TextView):
         self.t_hidden = tag(
             "md-hidden", size=1, foreground_rgba=_rgba("rgba(0,0,0,0)"), tabs=tiny_tabs
         )
+        # A line with no text left once its markup is hidden ("1. ", "- ", "## ") would
+        # shrink to the hidden text's height: its last marker character keeps its size
+        # (unseen), and the line's margin is that character's width less (_strut_line),
+        # so the cursor sits where the text will start.
+        self.t_strut = tag("md-strut", foreground_rgba=_rgba("rgba(0,0,0,0)"), tabs=tiny_tabs)
+        self._strut_lines: dict[tuple[int, int], Gtk.TextTag] = {}  # by (margin, width)
         self.t_markup = tag("md-markup")  # dimmed markup; colour set in _update_colors
         self.t_list = [tag(f"md-list{d}") for d in range(md.MAX_DEPTH + 1)]
         self.t_quote = [tag(f"md-quote{d}", style=Pango.Style.ITALIC) for d in range(1, 7)]
@@ -221,6 +227,8 @@ class MarkdownEditor(Gtk.TextView):
         for t in (self.t_code, self.t_fence):
             t.set_property("left-margin", m + CODE_INSET)
             t.set_property("right-margin", m + CODE_INSET)
+        for (offset, width), t in self._strut_lines.items():
+            t.set_property("left-margin", m + offset - width)
 
     def _update_colors(self) -> None:
         fg = self.get_color()
@@ -428,6 +436,18 @@ class MarkdownEditor(Gtk.TextView):
             else:
                 span(self.t_hidden, 0, info.marker)
                 span(self.t_image_row, 0)
+        text = self._lines[line]
+        all_hidden = (
+            kind in ("bullet", "task", "quote")
+            or (kind == "ordered" and line != self._number_line)
+            or (kind == "heading" and not on_cursor)
+        )
+        if all_hidden and 0 < len(text) <= info.content:  # no text: keep the line's height
+            last = start.copy()
+            last.set_line_offset(len(text) - 1)
+            b.remove_tag(self.t_hidden, last, end)
+            span(self.t_strut, len(text) - 1)
+            span(self._strut_line(text[-1], info), 0)
         if kind not in ("code", "fence", "rule", "image", "blank"):
             marker = self.t_markup if on_cursor else self.t_hidden
             for sp in md.inline_spans(self._lines[line], info.content):
@@ -436,6 +456,30 @@ class MarkdownEditor(Gtk.TextView):
                     span(marker, sp.start, sp.inner_start)
                 if sp.inner_end < sp.end:
                     span(marker, sp.inner_end, sp.end)
+
+    def _strut_line(self, ch: str, info: md.LineInfo) -> Gtk.TextTag:
+        """A tag giving a line its usual margin less the width of ch (see t_strut)."""
+        width = 0
+        if ch != "\t":  # a tab gets a 1 px stop
+            layout = self.create_pango_layout(ch)
+            if info.kind == "heading":
+                attrs = Pango.AttrList()
+                attrs.insert(Pango.attr_scale_new(HEADING_SCALES[min(info.level, 3)]))
+                layout.set_attributes(attrs)
+            width = round(layout.get_size()[0] / Pango.SCALE)
+        if info.kind in md.LIST_KINDS:
+            offset = (info.depth + 1) * LIST_STEP
+        elif info.kind == "quote":
+            offset = min(info.depth, len(self.t_quote)) * QUOTE_STEP
+        else:
+            offset = 0
+        t = self._strut_lines.get((offset, width))
+        if t is None:
+            t = self.buffer.create_tag(f"md-strut-line{offset}-{width}")
+            t.set_property("left-margin", self._margin + offset - width)
+            self._tags.append(t)
+            self._strut_lines[offset, width] = t
+        return t
 
     def _on_cursor_moved(self, *_args) -> None:
         # Show the new line's markup a moment later, not while GTK is still handling the

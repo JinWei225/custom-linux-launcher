@@ -586,6 +586,27 @@ def main() -> int:
     ok = wait(lambda: "beforeplain text" in t.text(), 2.0)
     check("pasting text still pastes text", ok, repr(t.text()))
 
+    # An item with no text yet is as tall as a line of text, cursor where the text goes.
+    def line_height(line: int) -> int:
+        return window.editor.get_line_yrange(window.buffer.get_iter_at_line(line)[1])[1]
+
+    for empty in ("1. ", "- ", "- [ ] ", "\t- ", "> ", "## "):
+        window.editor.load_text(f"word\n{empty}\nword")
+        t.go(0, 0)
+        pump(0.3)
+        check(f"an empty {empty.strip()!r} line keeps its height", line_height(1) >= line_height(0),
+              f"{line_height(1)} vs {line_height(0)}")  # fmt: skip
+        t.go(1, len(empty))
+        pump(0.3)
+        strong, _weak = window.editor.get_cursor_locations(None)
+        t.type("x")
+        pump(0.3)
+        it = window.buffer.get_iter_at_line_offset(1, len(empty))[1]
+        x = window.editor.get_iter_location(it).x
+        check(f"the cursor on an empty {empty.strip()!r} line sits where its text goes",
+              abs(strong.x - x) <= 1 and strong.height >= line_height(0) * 0.6,
+              f"cursor x {strong.x} h {strong.height}, text x {x}")  # fmt: skip
+
     # Input methods: while composing, Enter and Tab belong to the IME.
     t.clear()
     t.type("- 中文")
