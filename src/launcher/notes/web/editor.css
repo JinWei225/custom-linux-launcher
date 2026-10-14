@@ -42,6 +42,10 @@ html, body {
   background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+.cm-editor .cm-cursor {
+  border-left: 1px solid var(--fg);
+}
+
 .cm-dim {
   color: var(--dim);
 }

@@ -16,7 +16,7 @@
 // "notes" script message handler.
 
 import { EditorSelection, EditorState, Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, WidgetType, drawSelection, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, insertNewline } from "@codemirror/commands";
 import * as md from "./markdown.js";
 
@@ -663,6 +663,9 @@ const layout = EditorView.theme({
 
 const extensions = [
   layout,
+  // CodeMirror's own caret: WebKit's lags behind a line that moves under it (Tab,
+  // Shift+Tab), showing up at the new place only at its next blink.
+  drawSelection(),
   analysis,
   numberLine,
   livePreview,
