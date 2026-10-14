@@ -16,7 +16,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from ..notes_store import Folder, Note  # noqa: E402
 
-RECENT_LIMIT = 10
+RECENT_LIMIT = 5
 INDENT = 14
 
 
