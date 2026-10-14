@@ -272,6 +272,12 @@ def main() -> int:
     io.key(Gdk.KEY_End)
     io.key(Gdk.KEY_Tab)
     expect("Tab makes a sub-item and renumbers", ["1. a", "\ta) b", "2. c"], start)
+    caret_gap = (
+        "(() => { const v = notes.view, c = document.querySelector('.cm-cursor');"
+        " const want = v.coordsAtPos(v.state.selection.main.head);"
+        " return c ? Math.abs(c.getBoundingClientRect().left - want.left) : 999; })()"
+    )
+    check("the caret moves with the indented item", wait_for(lambda: io.js(caret_gap) < 2, 0.2))
     io.combo(Gdk.KEY_Control_L, Gdk.KEY_z)
     expect("one Ctrl+Z undoes the indent and the renumbering", ["1. a", "2. b", "3. c"], start)
 
