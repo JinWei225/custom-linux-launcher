@@ -47,6 +47,7 @@ from .favicons import FaviconCache  # noqa: E402
 from .file_watcher import FileWatcher  # noqa: E402
 from .files_index import FileIndex, IndexSettings  # noqa: E402
 from .helper import Helper, Target  # noqa: E402
+from .keyboards import KeyboardWatcher  # noqa: E402
 from .providers.apps import AppsProvider  # noqa: E402
 from .providers.base import Result  # noqa: E402
 from .providers.clipboard import ClipboardProvider  # noqa: E402
@@ -95,6 +96,7 @@ class LauncherApp(Adw.Application):
         self._favicons: FaviconCache | None = None
         self._rates: RatesCache | None = None
         self._file_watcher: FileWatcher | None = None
+        self._keyboard_watcher: KeyboardWatcher | None = None
         self._helper: Helper | None = None
         self._clips: ClipboardStore | None = None
         self._recorder: ClipboardRecorder | None = None
@@ -178,6 +180,7 @@ class LauncherApp(Adw.Application):
         self.window.realize()  # pay the first-show setup cost at startup, not on first use
         self._add_actions()
         self._watch_config()
+        self._keyboard_watcher = KeyboardWatcher(self._restart_espanso)
         log.info("launcher started (config: %s)", paths.config_file())
         # Give the helper extension a moment to answer before the first setup check.
         GLib.timeout_add_seconds(SETUP_CHECK_DELAY_S, lambda: (self.check_setup(), False)[1])
@@ -196,6 +199,8 @@ class LauncherApp(Adw.Application):
             self._rates.shutdown()
         if self._file_watcher is not None:
             self._file_watcher.shutdown()
+        if self._keyboard_watcher is not None:
+            self._keyboard_watcher.shutdown()
         Adw.Application.do_shutdown(self)
 
     def do_activate(self) -> None:
@@ -379,6 +384,25 @@ class LauncherApp(Adw.Application):
             self.notify_error("Launcher hotkey failed", str(e))
             return
         self._engine.record(Result(id=item_id, title=key))
+
+    def _restart_espanso(self, keyboards: list[str]) -> None:
+        """espanso only reads the keyboards that were there when it started: restart it
+        (if it's running) so a keyboard plugged in now expands triggers too."""
+        log.info("new keyboard (%s): restarting espanso", ", ".join(keyboards))
+        argv = ["systemctl", "--user", "try-restart", "espanso.service"]
+        try:
+            process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error as e:
+            log.warning("couldn't restart espanso: %s", e.message)
+            return
+
+        def done(proc, result) -> None:
+            try:
+                proc.wait_check_finish(result)
+            except GLib.Error as e:
+                log.warning("restarting espanso failed: %s", e.message)
+
+        process.wait_check_async(None, done)
 
     def _sync_espanso(self) -> list[str]:
         """Give espanso the snippets that have a trigger; returns problems for the banner."""
