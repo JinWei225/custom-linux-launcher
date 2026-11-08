@@ -119,6 +119,30 @@ def test_espanso_only_matters_with_triggers():
     assert by_key(healthy(config=with_trigger))["espanso"].detail == "Running with 1 trigger(s)"
 
 
+def test_espanso_can_t_see_keyboards_plugged_in_after_it_started():
+    with_trigger = Config(snippets=(Snippet(name="Sig", body="x", trigger=";sig"),))
+    keyboards = [
+        ("AT Translated Set 2 keyboard", 1000.0),  # there when espanso started
+        ("BY Tech RK68 HE", 5000.0),
+        ("BY Tech RK68 HE Keyboard", 5000.0),  # the same keyboard
+        ("2.4G Wireless Device", 4000.0),
+    ]
+    late = by_key(healthy(config=with_trigger, espanso_started=1001.0, keyboards=keyboards))
+    check = late["espanso"]
+    assert check.status == WARNING
+    assert check.detail.endswith(": 2.4G Wireless Device, BY Tech RK68 HE")
+    assert check.command == ("systemctl", "--user", "restart", "espanso.service")
+    # after a restart, espanso has read them all
+    fine = healthy(config=with_trigger, espanso_started=6000.0, keyboards=keyboards)
+    assert by_key(fine)["espanso"].status == OK
+    # keyboards made in the same moment as espanso's own device were read
+    same = healthy(config=with_trigger, espanso_started=4999.0, keyboards=keyboards[1:3])
+    assert by_key(same)["espanso"].status == OK
+    # without espanso's virtual device there's nothing to compare with
+    unknown = healthy(config=with_trigger, espanso_started=0.0, keyboards=keyboards)
+    assert by_key(unknown)["espanso"].status == OK
+
+
 def test_notes_pdf_and_folders():
     notes = by_key(healthy(config=Config(notes=NotesConfig(folder="/root/x")),
                            notes_writable=False))["notes"]  # fmt: skip

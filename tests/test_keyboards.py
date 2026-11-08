@@ -8,6 +8,7 @@ from gi.repository import GLib  # noqa: E402
 
 from launcher.keyboards import (  # noqa: E402
     KeyboardWatcher,
+    espanso_started,
     is_keyboard,
     keyboards,
     parse_bitmap,
@@ -70,6 +71,21 @@ def test_keyboards_lists_names_and_when_they_appeared(tmp_path):
     found = keyboards(tmp_path / "class" / "input", dev)
     assert [(k.node, k.name, k.since) for k in found] == [("event3", "Laptop keyboard", 1000)]
     assert keyboards(tmp_path / "missing", dev) == []
+
+
+def test_espanso_started_is_when_its_virtual_keyboard_appeared(tmp_path):
+    add_device(tmp_path, "event3", "Laptop keyboard", LAPTOP, "platform/i8042")
+    add_device(tmp_path, "event12", "Espanso virtual device", ESPANSO, "virtual/input")
+    dev = tmp_path / "dev"
+    dev.mkdir()
+    for node, when in (("event3", 1000), ("event12", 2000)):
+        (dev / node).touch()
+        os.utime(dev / node, (when, when))
+    sys_input = tmp_path / "class" / "input"
+    assert espanso_started(sys_input, dev) == 2000
+    (dev / "event12").unlink()
+    assert espanso_started(sys_input, dev) == 0
+    assert espanso_started(tmp_path / "missing", dev) == 0
 
 
 def run_until(condition, timeout_s=5.0):

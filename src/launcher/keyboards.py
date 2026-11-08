@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 
 SYS_INPUT = Path("/sys/class/input")
 DEV_INPUT = Path("/dev/input")
+ESPANSO_DEVICE = "Espanso virtual device"  # made by espanso's worker each time it starts
 SETTLE_MS = 1500  # a keyboard shows up as several devices at once: restart espanso once
 _EVENT_NODE = re.compile(r"event\d+")
 _WORD_BITS = struct.calcsize("l") * 8  # sysfs prints capability bitmaps in longs
@@ -81,6 +82,25 @@ def keyboards(sys_input: Path = SYS_INPUT, dev_input: Path = DEV_INPUT) -> list[
             since = 0.0
         found.append(Keyboard(node, device_name(node, sys_input), since))
     return found
+
+
+def espanso_started(sys_input: Path = SYS_INPUT, dev_input: Path = DEV_INPUT) -> float:
+    """When espanso's worker last read the keyboards (epoch seconds), going by the
+    virtual keyboard it makes at the same time; 0 if it has none. More exact than the
+    service's start: the worker also restarts whenever its match files change."""
+    try:
+        nodes = [p.name for p in sys_input.iterdir() if _EVENT_NODE.fullmatch(p.name)]
+    except OSError:
+        return 0.0
+    started = 0.0
+    for node in nodes:
+        if device_name(node, sys_input) != ESPANSO_DEVICE:
+            continue
+        try:
+            started = max(started, (dev_input / node).stat().st_mtime)
+        except OSError:
+            pass
+    return started
 
 
 class KeyboardWatcher:

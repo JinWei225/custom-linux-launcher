@@ -58,6 +58,8 @@ class Facts:
     espanso: bool = False  # the espanso command is installed
     espanso_service: str = ""
     espanso_file: bool = False  # espanso's launcher.yml exists
+    espanso_started: float = 0.0  # when espanso last read the keyboards; 0 if unknown
+    keyboards: list[tuple[str, float]] = field(default_factory=list)  # (name, plugged in at)
     gi_cairo: bool = True
     webkit: bool = True  # WebKitGTK 6.0, for the Notes editor
     shortcuts_missing: list[str] = field(default_factory=list)
@@ -279,7 +281,29 @@ def _espanso(f: Facts) -> Check:
             "Reload the launcher, which writes them.",
             (f.launcher, "--reload"),
         )
+    unseen = _unseen_keyboards(f)
+    if unseen:
+        return Check(
+            "espanso",
+            title,
+            WARNING,
+            _listing("Triggers won't expand on keyboards connected after espanso started", unseen),
+            "Restart espanso so it reads them.",
+            ("systemctl", "--user", "restart", "espanso.service"),
+        )
     return Check("espanso", title, OK, f"Running with {len(triggers)} trigger(s)")
+
+
+KEYBOARD_SLACK_S = 2  # devices made in the same moment as espanso's are ones it read
+
+
+def _unseen_keyboards(f: Facts) -> list[str]:
+    """Keyboards espanso can't read: it only looks for them when it starts. One keyboard
+    is often several devices ("RK68", "RK68 Keyboard"): name each once."""
+    if not f.espanso_started:
+        return []
+    names = sorted({n for n, since in f.keyboards if since > f.espanso_started + KEYBOARD_SLACK_S})
+    return [n for n in names if not any(n != m and n.startswith(m) for m in names)]
 
 
 def _notes(f: Facts) -> Check:
@@ -436,6 +460,11 @@ def gather(config_path: Path | None = None) -> Facts:
     f.espanso = shutil.which("espanso") is not None
     f.espanso_service, _ = _unit("espanso.service")
     f.espanso_file = (paths.espanso_match_dir() / "launcher.yml").exists()
+    if f.espanso_service == "active":
+        from . import keyboards
+
+        f.espanso_started = keyboards.espanso_started()
+        f.keyboards = [(k.name, k.since) for k in keyboards.keyboards()]
     _gather_extension(f)
     try:
         import gi

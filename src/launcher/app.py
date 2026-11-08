@@ -401,6 +401,7 @@ class LauncherApp(Adw.Application):
                 proc.wait_check_finish(result)
             except GLib.Error as e:
                 log.warning("restarting espanso failed: %s", e.message)
+            self.check_setup()  # clear the banner's "keyboards espanso can't see"
 
         process.wait_check_async(None, done)
 
