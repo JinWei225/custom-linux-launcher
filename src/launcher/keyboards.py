@@ -9,6 +9,10 @@ A keyboard is an input device with every letter key. Virtual keyboards made thro
 uinput are left out: espanso makes one itself each time it starts, so counting it would
 restart espanso forever (keyboards paired over Bluetooth LE go through uhid, not uinput,
 so they still count).
+
+Which devices espanso has read is decided by the kernel's device numbers (input3,
+input19…), which only ever go up, never by timestamps: the clock can jump after the
+devices are made (an 8-hour step at boot when the hardware clock keeps local time).
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ _LETTERS = (*range(16, 26), *range(30, 39), *range(44, 51))  # KEY_Q…P, KEY_A�
 class Keyboard:
     node: str  # "event20"
     name: str  # "BY Tech RK68 HE Keyboard"
-    since: float  # when its /dev/input node was made (epoch seconds); 0 if unknown
+    number: int  # the kernel's device number: 36 for input36; higher is newer
 
 
 def parse_bitmap(text: str) -> int:
@@ -67,40 +71,43 @@ def device_name(node: str, sys_input: Path = SYS_INPUT) -> str:
         return node
 
 
-def keyboards(sys_input: Path = SYS_INPUT, dev_input: Path = DEV_INPUT) -> list[Keyboard]:
+def device_number(node: str, sys_input: Path = SYS_INPUT) -> int:
+    """N in /sys/devices/…/inputN/eventM. The kernel numbers input devices in the order
+    they are made and never reuses a number until the next boot (unlike eventM)."""
+    parent = os.path.basename(os.path.dirname(os.path.realpath(sys_input / node)))
+    match = re.fullmatch(r"input(\d+)", parent)
+    return int(match.group(1)) if match else 0
+
+
+def keyboards(sys_input: Path = SYS_INPUT) -> list[Keyboard]:
     found = []
     try:
         nodes = sorted(p.name for p in sys_input.iterdir())
     except OSError:
         return []
     for node in nodes:
-        if not is_keyboard(node, sys_input):
-            continue
-        try:
-            since = (dev_input / node).stat().st_mtime
-        except OSError:
-            since = 0.0
-        found.append(Keyboard(node, device_name(node, sys_input), since))
+        if is_keyboard(node, sys_input):
+            found.append(
+                Keyboard(node, device_name(node, sys_input), device_number(node, sys_input))
+            )
     return found
 
 
-def espanso_started(sys_input: Path = SYS_INPUT, dev_input: Path = DEV_INPUT) -> float:
-    """When espanso's worker last read the keyboards (epoch seconds), going by the
-    virtual keyboard it makes at the same time; 0 if it has none. More exact than the
-    service's start: the worker also restarts whenever its match files change."""
+def espanso_device(sys_input: Path = SYS_INPUT) -> int:
+    """The device number of espanso's virtual keyboard; 0 if it has none. espanso's
+    worker makes it right after reading the keyboards, so it read every keyboard with a
+    lower number. (The worker also restarts when its match files change, so this is more
+    exact than when the service started.)"""
     try:
         nodes = [p.name for p in sys_input.iterdir() if _EVENT_NODE.fullmatch(p.name)]
     except OSError:
-        return 0.0
-    started = 0.0
-    for node in nodes:
-        if device_name(node, sys_input) != ESPANSO_DEVICE:
-            continue
-        try:
-            started = max(started, (dev_input / node).stat().st_mtime)
-        except OSError:
-            pass
-    return started
+        return 0
+    numbers = [
+        device_number(node, sys_input)
+        for node in nodes
+        if device_name(node, sys_input) == ESPANSO_DEVICE
+    ]
+    return max(numbers, default=0)
 
 
 class KeyboardWatcher:

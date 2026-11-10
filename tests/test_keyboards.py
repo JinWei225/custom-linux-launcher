@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import gi
@@ -8,7 +7,7 @@ from gi.repository import GLib  # noqa: E402
 
 from launcher.keyboards import (  # noqa: E402
     KeyboardWatcher,
-    espanso_started,
+    espanso_device,
     is_keyboard,
     keyboards,
     parse_bitmap,
@@ -22,9 +21,12 @@ MOUSE = "1f0000 0 0 0 0"
 ESPANSO = " ".join(["ffffffffffffffff"] * 3 + ["fffffffffffffffe"])
 
 
-def add_device(root: Path, node: str, name: str, keys: str, parent: str = "pci/usb1") -> None:
-    """A /sys/class/input/eventN symlink into /sys/devices, as the kernel makes it."""
-    real = root / "devices" / parent / f"input{node[5:]}" / node
+def add_device(
+    root: Path, node: str, name: str, keys: str, parent: str = "pci/usb1", number: int = 0
+) -> None:
+    """A /sys/class/input/eventN symlink into /sys/devices/…/inputN, as the kernel makes
+    it (the device number is the event number unless given)."""
+    real = root / "devices" / parent / f"input{number or node[5:]}" / node
     (real / "device" / "capabilities").mkdir(parents=True)
     (real / "device" / "name").write_text(name + "\n")
     (real / "device" / "capabilities" / "key").write_text(keys + "\n")
@@ -61,31 +63,26 @@ def test_uinput_keyboards_are_left_out_but_bluetooth_le_counts(tmp_path):
     assert is_keyboard("event30", sys_input)
 
 
-def test_keyboards_lists_names_and_when_they_appeared(tmp_path):
-    add_device(tmp_path, "event3", "Laptop keyboard", LAPTOP, "platform/i8042")
+def test_keyboards_lists_names_and_device_numbers(tmp_path):
+    add_device(tmp_path, "event3", "Laptop keyboard", LAPTOP, "platform/i8042", number=3)
+    # event numbers are reused, device numbers aren't: event2 can be newer than event3
+    add_device(tmp_path, "event2", "RK68 Keyboard", USB_KEYBOARD, number=36)
     add_device(tmp_path, "event21", "Mouse", MOUSE)
-    dev = tmp_path / "dev"
-    dev.mkdir()
-    (dev / "event3").touch()
-    os.utime(dev / "event3", (1000, 1000))
-    found = keyboards(tmp_path / "class" / "input", dev)
-    assert [(k.node, k.name, k.since) for k in found] == [("event3", "Laptop keyboard", 1000)]
-    assert keyboards(tmp_path / "missing", dev) == []
+    found = keyboards(tmp_path / "class" / "input")
+    assert [(k.node, k.name, k.number) for k in found] == [
+        ("event2", "RK68 Keyboard", 36),
+        ("event3", "Laptop keyboard", 3),
+    ]
+    assert keyboards(tmp_path / "missing") == []
 
 
-def test_espanso_started_is_when_its_virtual_keyboard_appeared(tmp_path):
-    add_device(tmp_path, "event3", "Laptop keyboard", LAPTOP, "platform/i8042")
-    add_device(tmp_path, "event12", "Espanso virtual device", ESPANSO, "virtual/input")
-    dev = tmp_path / "dev"
-    dev.mkdir()
-    for node, when in (("event3", 1000), ("event12", 2000)):
-        (dev / node).touch()
-        os.utime(dev / node, (when, when))
+def test_espanso_device_is_the_number_of_its_virtual_keyboard(tmp_path):
     sys_input = tmp_path / "class" / "input"
-    assert espanso_started(sys_input, dev) == 2000
-    (dev / "event12").unlink()
-    assert espanso_started(sys_input, dev) == 0
-    assert espanso_started(tmp_path / "missing", dev) == 0
+    add_device(tmp_path, "event3", "Laptop keyboard", LAPTOP, "platform/i8042", number=3)
+    assert espanso_device(sys_input) == 0
+    add_device(tmp_path, "event13", "Espanso virtual device", ESPANSO, "virtual/input", 19)
+    assert espanso_device(sys_input) == 19
+    assert espanso_device(tmp_path / "missing") == 0
 
 
 def run_until(condition, timeout_s=5.0):

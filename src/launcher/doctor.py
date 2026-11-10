@@ -58,8 +58,8 @@ class Facts:
     espanso: bool = False  # the espanso command is installed
     espanso_service: str = ""
     espanso_file: bool = False  # espanso's launcher.yml exists
-    espanso_started: float = 0.0  # when espanso last read the keyboards; 0 if unknown
-    keyboards: list[tuple[str, float]] = field(default_factory=list)  # (name, plugged in at)
+    espanso_device: int = 0  # device number of espanso's virtual keyboard; 0 if unknown
+    keyboards: list[tuple[str, int]] = field(default_factory=list)  # (name, device number)
     gi_cairo: bool = True
     webkit: bool = True  # WebKitGTK 6.0, for the Notes editor
     shortcuts_missing: list[str] = field(default_factory=list)
@@ -294,15 +294,12 @@ def _espanso(f: Facts) -> Check:
     return Check("espanso", title, OK, f"Running with {len(triggers)} trigger(s)")
 
 
-KEYBOARD_SLACK_S = 2  # devices made in the same moment as espanso's are ones it read
-
-
 def _unseen_keyboards(f: Facts) -> list[str]:
     """Keyboards espanso can't read: it only looks for them when it starts. One keyboard
     is often several devices ("RK68", "RK68 Keyboard"): name each once."""
-    if not f.espanso_started:
+    if not f.espanso_device:
         return []
-    names = sorted({n for n, since in f.keyboards if since > f.espanso_started + KEYBOARD_SLACK_S})
+    names = sorted({n for n, number in f.keyboards if number > f.espanso_device})
     return [n for n in names if not any(n != m and n.startswith(m) for m in names)]
 
 
@@ -463,8 +460,8 @@ def gather(config_path: Path | None = None) -> Facts:
     if f.espanso_service == "active":
         from . import keyboards
 
-        f.espanso_started = keyboards.espanso_started()
-        f.keyboards = [(k.name, k.since) for k in keyboards.keyboards()]
+        f.espanso_device = keyboards.espanso_device()
+        f.keyboards = [(k.name, k.number) for k in keyboards.keyboards()]
     _gather_extension(f)
     try:
         import gi
