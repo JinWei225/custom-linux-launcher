@@ -141,6 +141,7 @@ class NotesConfig:
 class ConvertersConfig:
     """Answers typed straight into the main launcher ("tomorrow", "days until xmas")."""
 
+    calculator: bool = True
     dates: bool = True
     timezones: bool = True
     currency: bool = True
@@ -230,6 +231,7 @@ terminal_apps = [
 # Answers shown at the top of the main launcher while you type. Enter copies the
 # answer, Alt+Enter pastes it into the window you came from.
 [converters]
+calculator = true         # "12*(3+4)", "150 + 10%", "20% of 80", "sqrt 2", "sin 30°", "5!"
 dates = true              # "tomorrow", "2 months after today", "days until christmas"
 timezones = true          # "time in tokyo", "3pm tokyo", "3pm pst to london"
 currency = true           # "100 usd", "1.5k jpy to myr" (rates from open.er-api.com)

@@ -945,6 +945,7 @@ class ConvertersPage(_Page):
         )
         self._switches = {}
         for key, title, examples in (
+            ("calculator", "Calculator", "12*(3+4) · 150 + 10% · 20% of 80 · sqrt 2 · 2^64"),
             ("dates", "Dates", "tomorrow · two months after today · days until christmas"),
             ("timezones", "Timezones", "time in tokyo · 3pm tokyo · 3pm pst to london"),
             ("currency", "Currency", "100 usd · 1.5k jpy to myr · 50 ringgit in won"),

@@ -20,6 +20,7 @@ MODES: dict[str, tuple[str, ...]] = {
         "snippet-search",
         "notes",
         "commands",
+        "calculator",  # before dates: "3/4" is 0.75 first, the 3rd of April second
         "dates",
         "timezones",
         "currency",

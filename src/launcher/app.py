@@ -50,6 +50,7 @@ from .helper import Helper, Target  # noqa: E402
 from .keyboards import KeyboardWatcher  # noqa: E402
 from .providers.apps import AppsProvider  # noqa: E402
 from .providers.base import Result  # noqa: E402
+from .providers.calculator import CalculatorProvider  # noqa: E402
 from .providers.clipboard import ClipboardProvider  # noqa: E402
 from .providers.commands import CommandsProvider  # noqa: E402
 from .providers.currency import CurrencyProvider  # noqa: E402
@@ -153,6 +154,7 @@ class LauncherApp(Adw.Application):
                 "apps": apps,
                 "quicklinks": QuickLinksProvider(self, icons=self._website_icon),
                 "commands": CommandsProvider(self),
+                "calculator": CalculatorProvider(self),
                 "dates": DatesProvider(self),
                 "timezones": TimezonesProvider(self, clock_24h=self._clock_24h),
                 "currency": CurrencyProvider(

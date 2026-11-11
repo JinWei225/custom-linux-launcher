@@ -23,7 +23,7 @@ Decisions are marked **🔶 Dn**. Each lists the options and a recommendation. R
 | 9 | Converters in the main search: dates in words, timezones, currency (online rates) | M6 |
 | 10 | Notes: markdown notes with formatting applied as you type, sidebar of folders | M7 |
 
-Out of scope for now: plugins/extensions API, calculator, window switcher, emoji picker. Any of these can be added later as another provider.
+Out of scope for now: plugins/extensions API, window switcher, emoji picker. Any of these can be added later as another provider.
 
 ---
 
@@ -299,6 +299,14 @@ Answers appear at the top of the main launcher while you type. Enter copies, Alt
 - Home currency: `home_currency` in `[converters]`, or else from the timezone's country (zone.tab → a country→currency table), else USD.
 - **Tests:** `tests/test_currency.py` (~105 cases: parsing, arithmetic, formatting, the cache's refresh/back-off/in-flight rules with a fake clock, the API response and its failures, the provider); the end-to-end test seeds `rates.json` and checks that Enter on `1.5k usd to jpy` copies `225000`.
 
+**Calculator** (`calc.py`, `providers/calculator.py`; built 2026-11-11):
+- `12*(3+4)` → "84", subtitle the expression as typed (plus `= 4/3` for a simple fraction with no short decimal). Enter copies the plain number (`1234.5`, no commas), Alt+Enter pastes.
+- Own recursive-descent parser, never `eval()`. `+ - * / x × ÷ ^ ** mod`, brackets (a missing `)` at the end is closed while typing), implicit multiplication (`2pi`, `3(4+5)`), `!`, `°`/`deg`, `0x`/`0b`/`0o` literals, `1,234` grouping, `1.5e3`; `pi π e tau`; `sqrt √ cbrt abs round floor ceil ln log log2 exp sin cos tan asin acos atan sinh cosh tanh` (with brackets, or on the next value: `sqrt 2`). Raycast-style percentages: `150 + 10%` = 165, `150 - 10%` = 135, `20% of 80` = 16, `50%` = 0.5.
+- Exact fractions while only `+ - * / ^`(whole powers) `% !` are used, so `0.1+0.2` = 0.3 and `2^64` keeps every digit; functions switch to floats, shown to 15 significant digits (hides one-ulp noise: `tan(45°)` = 1, `sin(pi)` = 0). Plain up to 1e21, then `1.5e25`. Powers past 4096 bits go to floats and overflow to no answer, so `9^9^9` can't hang.
+- Only a sum counts: an operator, function or bracket is needed, so `42`, `pi`, `e` and `windows 11` stay searches; a leading `=` lifts that (`=pi`). `2026-11-11` is left to the dates converter; `3/4` shows both (the calculator first). No answer for `1/0`, `sqrt(-1)` and the like.
+- `calculator = true` in `[converters]`, a switch on Settings → Converters.
+- **Tests:** `tests/test_calc.py` (~140 cases: arithmetic, percentages, functions, non-sums, no-answer cases, formatting, the provider and its ranking against dates); the end-to-end test checks that Enter on `1200 + 10%` copies `1320`.
+
 **Settings → Converters** (built 2026-09-28): a switch per converter; home currency (a searchable list of the codes in `rates.json`, "Automatic (MYR)" first); how often to download rates (1–168 h); when the rates were published and downloaded, with **Refresh Now**, which runs the daemon's `refresh-rates` action (the daemon owns the cache) and re-reads the file after 1, 4 and 12 s; and the ExchangeRate-API attribution link. The window's default width grew to 1140 px so all 8 page names fit. Checked by driving the real page in the nested shell (switch and combo write the config, the action reaches the daemon, a stopped daemon is reported); `tests/test_config_writer.py` covers the `[converters]` round trip.
 
 ### 4.6 Notes (M7, see D11)
@@ -394,6 +402,7 @@ linux-launcher/
 │       ├── quicklinks.py         # quicklinks + fallback web searches
 │       ├── files.py
 │       ├── clipboard.py
+│       ├── calculator.py         # calculator answers (parser in ../calc.py)
 │       ├── currency.py           # currency answers (parser and rates cache in ../currency.py)
 │       ├── dates.py              # date answers (parser in ../dates.py)
 │       ├── timezones.py          # time answers (places and parsing in ../timezones.py)

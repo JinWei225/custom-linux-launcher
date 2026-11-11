@@ -305,6 +305,21 @@ def run(daemon_log: str) -> int:
     app.read(0.5)
     got = app.last("clipboard") or {}
     check("Enter copies a currency answer", got.get("text") == "225000", repr(got))
+    # 2f. Calculator: Enter copies the plain answer (no thousands commas).
+    launcher("--show", "--mode", "all")
+    time.sleep(0.8)
+    action("debug-set-query", "1200 + 10%")
+    time.sleep(0.4)
+    if SNAPSHOTS:
+        action("debug-snapshot", str(SNAPSHOTS / "calculator.png"))
+        time.sleep(0.2)
+    action("debug-run-selected")
+    time.sleep(0.5)
+    app.send("read-clipboard")
+    app.read(0.5)
+    got = app.last("clipboard") or {}
+    check("Enter copies a calculator answer", got.get("text") == "1320", repr(got))
+
     # Settings' "Refresh Now": the daemon downloads (or, offline, logs why it couldn't).
     action("refresh-rates")
     downloaded = wait_for(

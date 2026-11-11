@@ -28,6 +28,7 @@ Typed straight into the main search, answered as you type, Enter copies, Alt+Ent
 
 | Type | Get |
 |---|---|
+| `12*(3+4)`, `150 + 10%`, `20% of 80`, `sqrt 2`, `sin 30°`, `2^64`, `5!` | the answer (exact: `0.1+0.2` is `0.3`) |
 | `tomorrow`, `next friday`, `one week after 26 october 2026`, `christmas` | the date |
 | `time in tokyo`, `3pm tokyo`, `3pm tokyo to london` | the time there |
 | `100 usd`, `1.5k usd to jpy`, `50 eur in myr` | the amount, from daily rates cached for offline use |
